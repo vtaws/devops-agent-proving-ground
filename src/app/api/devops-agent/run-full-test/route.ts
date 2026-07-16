@@ -71,26 +71,56 @@ export async function POST(request: NextRequest) {
     template = await validateAndFixTemplate(cfn, bedrock, template, simulationPlan, region);
     results.steps.push({ step: "validate", status: "ok" });
 
-    // Step 3: Deploy
-    const stackName = `devops-sim-${Date.now().toString(36)}`;
-    await cfn.send(new CreateStackCommand({
-      StackName: stackName,
-      TemplateBody: template,
-      Capabilities: ["CAPABILITY_NAMED_IAM", "CAPABILITY_AUTO_EXPAND"],
-      Tags: [
-        { Key: "Purpose", Value: "DevOpsAgentTest" },
-        { Key: "AutoDelete", Value: "true" },
-        { Key: "ManagedBy", Value: "DevOpsProvingGround" },
-        { Key: "CaseId", Value: caseData?.caseId || "manual" },
-      ],
-      TimeoutInMinutes: 15,
-    }));
-    results.stackName = stackName;
-    results.steps.push({ step: "deploy", status: "ok", stackName });
+    // Step 3: Deploy (with retry on resource-level errors)
+    let stackName = `devops-sim-${Date.now().toString(36)}`;
+    let deployAttempt = 0;
+    let stackStatus = "UNKNOWN";
 
-    // Step 4: Wait for stack
-    const stackStatus = await waitForStack(cfn, stackName);
-    results.steps.push({ step: "wait", status: stackStatus === "CREATE_COMPLETE" ? "ok" : "warning", stackStatus });
+    while (deployAttempt < 2) {
+      deployAttempt++;
+      try {
+        await cfn.send(new CreateStackCommand({
+          StackName: stackName,
+          TemplateBody: template,
+          Capabilities: ["CAPABILITY_NAMED_IAM", "CAPABILITY_AUTO_EXPAND"],
+          Tags: [
+            { Key: "Purpose", Value: "DevOpsAgentTest" },
+            { Key: "AutoDelete", Value: "true" },
+            { Key: "ManagedBy", Value: "DevOpsProvingGround" },
+            { Key: "CaseId", Value: caseData?.caseId || "manual" },
+          ],
+          TimeoutInMinutes: 15,
+        }));
+      } catch (deployErr: any) {
+        // If stack name already exists from a rollback, use a new name
+        if (deployErr.message?.includes("AlreadyExists")) {
+          stackName = `devops-sim-${Date.now().toString(36)}`;
+          continue;
+        }
+        throw deployErr;
+      }
+
+      results.stackName = stackName;
+      results.steps.push({ step: "deploy", status: "ok", stackName, attempt: deployAttempt });
+
+      // Wait for stack
+      stackStatus = await waitForStack(cfn, stackName);
+      results.steps.push({ step: "wait", status: stackStatus === "CREATE_COMPLETE" ? "ok" : "warning", stackStatus });
+
+      if (stackStatus === "CREATE_COMPLETE") break;
+
+      // Stack failed — check why and try to fix template
+      if (deployAttempt < 2 && (stackStatus.includes("FAILED") || stackStatus.includes("ROLLBACK"))) {
+        const reason = await getFailureReason(cfn, stackName);
+        results.steps.push({ step: "deploy_retry", status: "fixing", reason });
+        // Fix template based on the actual deployment error
+        template = await validateAndFixTemplate(cfn, bedrock, template, simulationPlan, region);
+        // Delete failed stack before retrying
+        try { await cfn.send(new DeleteStackCommand({ StackName: stackName })); } catch {}
+        await new Promise((r) => setTimeout(r, 10000)); // wait for delete
+        stackName = `devops-sim-${Date.now().toString(36)}`;
+      }
+    }
 
     if (stackStatus.includes("FAILED") || stackStatus.includes("ROLLBACK")) {
       const reason = await getFailureReason(cfn, stackName);
@@ -160,9 +190,12 @@ CRITICAL CFN RULES YOU MUST FOLLOW:
 - Do NOT use Aurora Serverless v1 (engine-mode serverless) — use provisioned db.t3.medium instead
 - Avoid resources that take >10 minutes to create (no Aurora clusters, no Neptune, no large RDS)
 - Use RDS db.t3.micro with PostgreSQL if you need a database
-- Lambda functions need a valid Runtime (python3.11) and a Handler
+- For PostgreSQL RDS, use EngineVersion: '16.4' (NOT 15.4, 15.3, or any old version)
+- For MySQL RDS, use EngineVersion: '8.0.35'
+- Lambda functions need a valid Runtime (python3.12) and a Handler (index.handler)
 - Security Groups need a VpcId
-- All !Ref targets must exist as Resources or Parameters in the template`,
+- All !Ref targets must exist as Resources or Parameters in the template
+- Do NOT hardcode DBInstanceIdentifier — let CFN auto-generate it to avoid conflicts`,
     messages: [{ role: "user", content: `Create broken environment:\nBROKEN STATE: ${plan.brokenState}\nROOT CAUSE: ${plan.rootCause}\nSYMPTOMS:\n${(plan.symptoms || []).join("\n")}\nRegion: ${region}` }],
   };
   const cmd = new InvokeModelCommand({ modelId: "us.anthropic.claude-sonnet-4-6", contentType: "application/json", accept: "application/json", body: JSON.stringify(payload) });
@@ -185,8 +218,15 @@ async function validateAndFixTemplate(cfn: CloudFormationClient, bedrock: Bedroc
     const fixPayload = {
       anthropic_version: "bedrock-2023-05-31",
       max_tokens: 6000,
-      system: "Fix this CloudFormation template. The error is shown below. Output ONLY the corrected YAML, no explanation. Start with AWSTemplateFormatVersion.",
-      messages: [{ role: "user", content: `ERROR: ${error}\n\nBROKEN TEMPLATE:\n${template}\n\nFix the error and return corrected YAML only.` }],
+      system: `Fix this CloudFormation template. Output ONLY corrected YAML starting with AWSTemplateFormatVersion. No explanation.
+
+COMMON FIXES:
+- "Cannot find version X for postgres" → use EngineVersion: '16.4'
+- "Cannot find version X for mysql" → use EngineVersion: '8.0.35'
+- "Every Outputs member must contain a Value" → add Value: !Ref or Value: !GetAtt to each Output
+- "Template format error" → check YAML indentation and structure
+- Do NOT hardcode DBInstanceIdentifier — remove it and let CFN auto-generate`,
+      messages: [{ role: "user", content: `ERROR: ${error}\n\nTEMPLATE:\n${template}\n\nFix and return corrected YAML only.` }],
     };
     const cmd = new InvokeModelCommand({ modelId: "us.anthropic.claude-sonnet-4-6", contentType: "application/json", accept: "application/json", body: JSON.stringify(fixPayload) });
     const r = await bedrock.send(cmd);
