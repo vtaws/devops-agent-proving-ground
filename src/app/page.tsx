@@ -396,14 +396,28 @@ export default function DevOpsAgentProvingGround() {
                       </div>
                     </details>
 
-                    {/* Deploy info */}
+                    {/* Deploy info + cleanup */}
                     {s.deployResult && (
-                      <details>
-                        <summary className="text-xs text-gray-500 cursor-pointer">Stack: {s.deployResult.stackName}</summary>
-                        <div className="mt-1">
-                          {s.deployResult.consoleUrl && <a href={s.deployResult.consoleUrl} target="_blank" rel="noopener" className="text-xs text-blue-600 underline">Open in Console</a>}
-                        </div>
-                      </details>
+                      <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-100">
+                        <span className="text-xs text-gray-500">Stack: {s.deployResult.stackName} {s.deployResult.cleaned ? "(deleted)" : ""}</span>
+                        <button
+                          onClick={async () => {
+                            if (!userCreds || !s.deployResult?.stackName) return;
+                            try {
+                              await fetch("/api/devops-agent/cleanup", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ stackName: s.deployResult.stackName, credentials: userCreds }),
+                              });
+                              setScenarios((p) => p.map((sc) => sc.id === s.id ? { ...sc, deployResult: { ...sc.deployResult, cleaned: true } } : sc));
+                            } catch {}
+                          }}
+                          disabled={s.deployResult.cleaned}
+                          className="text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {s.deployResult.cleaned ? "✓ Deleted" : "🗑️ Delete Stack"}
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}

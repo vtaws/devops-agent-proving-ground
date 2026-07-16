@@ -31,7 +31,7 @@ import { STSClient, GetCallerIdentityCommand } from "@aws-sdk/client-sts";
  */
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { caseData, simulationPlan, credentials, accountId, region = "us-east-1", cleanup = false } = body;
+  const { caseData, simulationPlan, credentials, accountId, region = "us-east-1", cleanup = true } = body;
 
   if (!credentials || !credentials.accessKeyId) {
     return jsonResponse({ error: "Credentials required" }, 401);
@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
         { Key: "ManagedBy", Value: "DevOpsProvingGround" },
         { Key: "CaseId", Value: caseData?.caseId || "manual" },
       ],
-      TimeoutInMinutes: 10,
+      TimeoutInMinutes: 15,
     }));
     results.stackName = stackName;
     results.steps.push({ step: "deploy", status: "ok", stackName });
