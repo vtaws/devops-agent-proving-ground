@@ -26,8 +26,8 @@ interface SimPlan {
 }
 interface Scenario {
   id: string; case: RankedCase | SupportCase;
-  status: "generating" | "ready" | "deploying" | "deployed" | "testing" | "complete" | "failed";
-  plan?: SimPlan; deployResult?: any; agentResult?: any; metrics?: any; error?: string;
+  status: "generating" | "ready" | "deploying" | "deployed" | "verifying" | "verified" | "testing" | "complete" | "failed";
+  plan?: SimPlan; deployResult?: any; verification?: any; agentResult?: any; metrics?: any; error?: string;
 }
 type InputMode = "auto" | "manual";
 
@@ -157,10 +157,32 @@ export default function DevOpsAgentProvingGround() {
 
       setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "deployed" as const, deployResult: d } : s));
 
-      // Step 2: Wait for stack to be ready (brief pause for CFN to finish)
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      // Step 2: Wait for stack to finish creating
+      await waitForStack(d.stackName, "us-east-1", scenarioId);
 
-      // Step 3: Invoke DevOps Agent against the broken environment
+      // Step 3: Verify symptoms are replicated
+      setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "verifying" as const } : s));
+
+      const verifyRes = await fetch("/api/devops-agent/verify", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stackName: d.stackName, region: "us-east-1", simulationPlan: scenario.plan.simulationPlan }) });
+      const verifyData = await verifyRes.json();
+
+      if (verifyData.error) {
+        if (verifyData.needsAuth) setShowCredModal(true);
+        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: verifyData.error } : s));
+        return;
+      }
+
+      setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "verified" as const, verification: verifyData } : s));
+
+      // If not replicated, stop here
+      if (verifyData.status === "NOT_REPLICATED") {
+        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, verification: verifyData, error: `Issue not replicated: ${verifyData.message}` } : s));
+        return;
+      }
+
+      // Step 4: Invoke DevOps Agent
       setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "testing" as const } : s));
 
       const agentRes = await fetch("/api/devops-agent/invoke-agent", { method: "POST",
@@ -177,11 +199,11 @@ export default function DevOpsAgentProvingGround() {
 
       if (agentData.error) {
         if (agentData.needsAuth) setShowCredModal(true);
-        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: `Agent invocation failed: ${agentData.error}` } : s));
+        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: `Agent: ${agentData.error}` } : s));
         return;
       }
 
-      // Step 4: Complete with full results
+      // Step 5: Complete
       setScenarios((p) => p.map((s) => s.id === scenarioId ? {
         ...s, status: "complete" as const, agentResult: agentData.agentDiagnosis,
         metrics: { ...agentData.metrics, evaluation: agentData.evaluation },
@@ -190,6 +212,26 @@ export default function DevOpsAgentProvingGround() {
     } catch (e: any) {
       setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: e.message } : s));
     }
+  };
+
+  // Poll stack until CREATE_COMPLETE or failure
+  const waitForStack = async (stackName: string, region: string, scenarioId: string) => {
+    for (let i = 0; i < 20; i++) { // max 5 minutes (20 x 15s)
+      await new Promise((r) => setTimeout(r, 15000));
+      try {
+        const r = await fetch("/api/devops-agent/deploy", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "status", stackName, region }) });
+        const d = await r.json();
+        if (d.status === "CREATE_COMPLETE") return;
+        if (d.status?.includes("FAILED") || d.status?.includes("ROLLBACK")) {
+          throw new Error(`Stack failed: ${d.status}`);
+        }
+      } catch (e: any) {
+        if (e.message.includes("Stack failed")) throw e;
+      }
+    }
+    // If we get here, stack took too long but we'll proceed with verification anyway
   };
 
   const handleManualSimulate = () => {
@@ -312,7 +354,35 @@ export default function DevOpsAgentProvingGround() {
 
                 {s.status === "deploying" && <div className="text-orange-600 text-sm animate-pulse mt-3">🚀 Deploying broken infrastructure to your account...</div>}
 
-                {s.status === "deployed" && <div className="text-blue-600 text-sm animate-pulse mt-3">✅ Deployed — Preparing to invoke DevOps Agent...</div>}
+                {s.status === "deployed" && <div className="text-orange-600 text-sm animate-pulse mt-3">⏳ Waiting for stack to finish creating (polling every 15s)...</div>}
+
+                {s.status === "verifying" && (
+                  <div className="mt-3 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                    <div className="flex items-center gap-2 text-amber-700 text-sm animate-pulse">
+                      <span className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin inline-block"/>
+                      Verifying issue was replicated correctly...
+                    </div>
+                    <p className="text-xs text-amber-600 mt-1">Checking deployed resources match expected symptoms</p>
+                  </div>
+                )}
+
+                {s.status === "verified" && s.verification && (
+                  <div className="mt-3 p-4 bg-green-50 border border-green-200 rounded-lg">
+                    <p className="text-green-800 font-medium text-sm">
+                      {s.verification.status === "CONFIRMED" ? "✅ Issue Replicated" : "⚠️ Partially Replicated"}
+                      <span className="text-xs font-normal ml-2 text-green-600">(confidence: {s.verification.confidence})</span>
+                    </p>
+                    <p className="text-xs text-green-700 mt-1">{s.verification.message}</p>
+                    {s.verification.symptomsConfirmed?.length > 0 && (
+                      <div className="mt-2"><p className="text-[10px] font-bold text-green-700">✓ Confirmed:</p>
+                        <ul className="text-xs text-green-800 mt-1">{s.verification.symptomsConfirmed.map((sym: string, i: number) => <li key={i}>• {sym}</li>)}</ul></div>
+                    )}
+                    {s.verification.symptomsNotConfirmed?.length > 0 && (
+                      <div className="mt-2"><p className="text-[10px] font-bold text-amber-700">⚠ Not confirmed:</p>
+                        <ul className="text-xs text-amber-800 mt-1">{s.verification.symptomsNotConfirmed.map((sym: string, i: number) => <li key={i}>• {sym}</li>)}</ul></div>
+                    )}
+                  </div>
+                )}
 
                 {s.status === "testing" && (
                   <div className="mt-3 p-4 bg-purple-50 border border-purple-200 rounded-lg">
@@ -461,7 +531,7 @@ export default function DevOpsAgentProvingGround() {
 }
 
 function StatusBadge({ status }: { status: Scenario["status"] }) {
-  const c: Record<string, string> = { generating: "text-purple-600", ready: "text-blue-600", deploying: "text-orange-600", deployed: "text-blue-600", testing: "text-purple-600", complete: "text-green-600", failed: "text-red-600" };
-  const t: Record<string, string> = { generating: "⏳ Generating...", ready: "✓ Plan Ready", deploying: "🚀 Deploying...", deployed: "✅ Deployed", testing: "🤖 Agent Testing...", complete: "✅ Complete", failed: "❌ Failed" };
-  return <span className={`text-xs font-medium ${c[status] || ""} ${["generating", "deploying", "testing"].includes(status) ? "animate-pulse" : ""}`}>{t[status]}</span>;
+  const c: Record<string, string> = { generating: "text-purple-600", ready: "text-blue-600", deploying: "text-orange-600", deployed: "text-orange-600", verifying: "text-amber-600", verified: "text-green-600", testing: "text-purple-600", complete: "text-green-600", failed: "text-red-600" };
+  const t: Record<string, string> = { generating: "⏳ Generating...", ready: "✓ Plan Ready", deploying: "🚀 Deploying...", deployed: "⏳ Stack Creating...", verifying: "🔍 Verifying...", verified: "✅ Verified", testing: "🤖 Agent Testing...", complete: "✅ Complete", failed: "❌ Failed" };
+  return <span className={`text-xs font-medium ${c[status] || ""} ${["generating", "deploying", "deployed", "verifying", "testing"].includes(status) ? "animate-pulse" : ""}`}>{t[status]}</span>;
 }
