@@ -26,8 +26,8 @@ interface SimPlan {
 }
 interface Scenario {
   id: string; case: RankedCase | SupportCase;
-  status: "generating" | "ready" | "deploying" | "deployed" | "failed";
-  plan?: SimPlan; deployResult?: any; error?: string;
+  status: "generating" | "ready" | "deploying" | "deployed" | "testing" | "complete" | "failed";
+  plan?: SimPlan; deployResult?: any; agentResult?: any; metrics?: any; error?: string;
 }
 type InputMode = "auto" | "manual";
 
@@ -144,6 +144,7 @@ export default function DevOpsAgentProvingGround() {
     setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "deploying" as const } : s));
 
     try {
+      // Step 1: Deploy broken environment
       const r = await fetch("/api/devops-agent/deploy", { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ simulationPlan: scenario.plan.simulationPlan, region: "us-east-1" }) });
@@ -151,9 +152,41 @@ export default function DevOpsAgentProvingGround() {
       if (d.error) {
         if (d.needsAuth) setShowCredModal(true);
         setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: d.error } : s));
-      } else {
-        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "deployed" as const, deployResult: d } : s));
+        return;
       }
+
+      setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "deployed" as const, deployResult: d } : s));
+
+      // Step 2: Wait for stack to be ready (brief pause for CFN to finish)
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      // Step 3: Invoke DevOps Agent against the broken environment
+      setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "testing" as const } : s));
+
+      const agentRes = await fetch("/api/devops-agent/invoke-agent", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stackName: d.stackName,
+          region: "us-east-1",
+          simulationPlan: {
+            ...scenario.plan.simulationPlan,
+            humanBaselineHours: scenario.case.resolutionTimeHours || scenario.plan.evaluation?.humanBaselineHours || 2,
+          },
+        }) });
+      const agentData = await agentRes.json();
+
+      if (agentData.error) {
+        if (agentData.needsAuth) setShowCredModal(true);
+        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: `Agent invocation failed: ${agentData.error}` } : s));
+        return;
+      }
+
+      // Step 4: Complete with full results
+      setScenarios((p) => p.map((s) => s.id === scenarioId ? {
+        ...s, status: "complete" as const, agentResult: agentData.agentDiagnosis,
+        metrics: { ...agentData.metrics, evaluation: agentData.evaluation },
+      } : s));
+
     } catch (e: any) {
       setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: e.message } : s));
     }
@@ -279,16 +312,94 @@ export default function DevOpsAgentProvingGround() {
 
                 {s.status === "deploying" && <div className="text-orange-600 text-sm animate-pulse mt-3">🚀 Deploying broken infrastructure to your account...</div>}
 
-                {s.status === "deployed" && s.deployResult && (
-                  <div className="mt-3 p-4 bg-green-50 border border-green-200 rounded-lg">
-                    <p className="text-green-800 font-medium text-sm">✅ Deployed — Stack: {s.deployResult.stackName}</p>
-                    <p className="text-xs text-green-700 mt-1">Status: {s.deployResult.status}</p>
-                    {s.deployResult.consoleUrl && (
-                      <a href={s.deployResult.consoleUrl} target="_blank" rel="noopener" className="text-xs text-blue-600 underline mt-2 inline-block">Open in AWS Console →</a>
-                    )}
-                    <details className="mt-3"><summary className="text-xs text-gray-600 cursor-pointer">📄 View CFN Template</summary>
-                      <pre className="mt-2 text-[10px] text-gray-700 bg-gray-100 p-3 rounded overflow-auto max-h-[300px] font-mono">{s.deployResult.template}</pre>
+                {s.status === "deployed" && <div className="text-blue-600 text-sm animate-pulse mt-3">✅ Deployed — Preparing to invoke DevOps Agent...</div>}
+
+                {s.status === "testing" && (
+                  <div className="mt-3 p-4 bg-purple-50 border border-purple-200 rounded-lg">
+                    <div className="flex items-center gap-2 text-purple-700 text-sm animate-pulse">
+                      <span className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin inline-block"/>
+                      DevOps Agent is diagnosing the broken environment...
+                    </div>
+                    <p className="text-xs text-purple-600 mt-2">Inspecting stack resources, checking configurations, analyzing symptoms...</p>
+                  </div>
+                )}
+
+                {s.status === "complete" && s.metrics && s.agentResult && (
+                  <div className="mt-3 space-y-4">
+                    {/* Metrics Dashboard */}
+                    <div className="grid grid-cols-5 gap-3">
+                      <div className="p-3 bg-blue-50 rounded-lg text-center">
+                        <p className="text-xl font-bold text-blue-700">{s.metrics.agentTimeSeconds}s</p>
+                        <p className="text-[10px] text-blue-600">Agent Time</p>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded-lg text-center">
+                        <p className="text-xl font-bold text-gray-700">{s.metrics.humanBaselineHours}h</p>
+                        <p className="text-[10px] text-gray-600">Human Time</p>
+                      </div>
+                      <div className="p-3 bg-emerald-50 rounded-lg text-center">
+                        <p className="text-xl font-bold text-emerald-700">{s.metrics.timeSavedHours}h</p>
+                        <p className="text-[10px] text-emerald-600">Time Saved</p>
+                      </div>
+                      <div className="p-3 bg-green-50 rounded-lg text-center">
+                        <p className="text-xl font-bold text-green-700">${s.metrics.costSaved}</p>
+                        <p className="text-[10px] text-green-600">Cost Saved</p>
+                      </div>
+                      <div className="p-3 bg-purple-50 rounded-lg text-center">
+                        <p className="text-xl font-bold text-purple-700">{s.metrics.speedupFactor}</p>
+                        <p className="text-[10px] text-purple-600">Speed-up</p>
+                      </div>
+                    </div>
+
+                    {/* Verdict */}
+                    <div className={`p-4 rounded-lg border ${
+                      s.metrics.evaluation.verdict === "PASS" ? "bg-green-50 border-green-300" :
+                      s.metrics.evaluation.verdict === "PARTIAL" ? "bg-yellow-50 border-yellow-300" :
+                      "bg-red-50 border-red-300"
+                    }`}>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="text-lg mr-2">{s.metrics.evaluation.verdict === "PASS" ? "✅" : s.metrics.evaluation.verdict === "PARTIAL" ? "⚠️" : "❌"}</span>
+                          <span className="font-bold text-sm">{s.metrics.evaluation.verdict}</span>
+                          <span className="text-xs ml-2 text-gray-600">— Root cause: {s.metrics.evaluation.rootCauseAccuracy} | Confidence: {s.metrics.evaluation.agentConfidence} | Score: {s.metrics.evaluation.score}/100</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Agent Diagnosis */}
+                    <details open>
+                      <summary className="text-sm font-medium text-gray-700 cursor-pointer">🤖 Agent Diagnosis</summary>
+                      <div className="mt-2 space-y-2">
+                        <div className="p-3 bg-gray-50 rounded-lg">
+                          <p className="text-[10px] font-bold text-gray-600 uppercase">Root Cause Identified</p>
+                          <p className="text-sm text-gray-900 mt-1">{s.agentResult.rootCause}</p>
+                        </div>
+                        {s.agentResult.reasoning && (
+                          <div className="p-3 bg-gray-50 rounded-lg">
+                            <p className="text-[10px] font-bold text-gray-600 uppercase">Reasoning</p>
+                            <p className="text-xs text-gray-700 mt-1">{s.agentResult.reasoning}</p>
+                          </div>
+                        )}
+                        {s.agentResult.proposedFix?.commands?.length > 0 && (
+                          <div className="p-3 bg-gray-900 rounded-lg">
+                            <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Proposed Fix</p>
+                            <p className="text-xs text-gray-300 mb-2">{s.agentResult.proposedFix.description}</p>
+                            {s.agentResult.proposedFix.commands.map((cmd: string, i: number) => (
+                              <code key={i} className="block text-xs text-green-400 font-mono bg-gray-800 px-2 py-1 rounded mb-1">$ {cmd}</code>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </details>
+
+                    {/* Deploy info */}
+                    {s.deployResult && (
+                      <details>
+                        <summary className="text-xs text-gray-500 cursor-pointer">Stack: {s.deployResult.stackName}</summary>
+                        <div className="mt-1">
+                          {s.deployResult.consoleUrl && <a href={s.deployResult.consoleUrl} target="_blank" rel="noopener" className="text-xs text-blue-600 underline">Open in Console</a>}
+                        </div>
+                      </details>
+                    )}
                   </div>
                 )}
               </div>
@@ -350,7 +461,7 @@ export default function DevOpsAgentProvingGround() {
 }
 
 function StatusBadge({ status }: { status: Scenario["status"] }) {
-  const c: Record<string, string> = { generating: "text-purple-600", ready: "text-blue-600", deploying: "text-orange-600", deployed: "text-green-600", failed: "text-red-600" };
-  const t: Record<string, string> = { generating: "⏳ Generating...", ready: "✓ Plan Ready", deploying: "🚀 Deploying...", deployed: "✅ Deployed", failed: "❌ Failed" };
-  return <span className={`text-xs font-medium ${c[status] || ""} ${status === "generating" || status === "deploying" ? "animate-pulse" : ""}`}>{t[status]}</span>;
+  const c: Record<string, string> = { generating: "text-purple-600", ready: "text-blue-600", deploying: "text-orange-600", deployed: "text-blue-600", testing: "text-purple-600", complete: "text-green-600", failed: "text-red-600" };
+  const t: Record<string, string> = { generating: "⏳ Generating...", ready: "✓ Plan Ready", deploying: "🚀 Deploying...", deployed: "✅ Deployed", testing: "🤖 Agent Testing...", complete: "✅ Complete", failed: "❌ Failed" };
+  return <span className={`text-xs font-medium ${c[status] || ""} ${["generating", "deploying", "testing"].includes(status) ? "animate-pulse" : ""}`}>{t[status]}</span>;
 }
