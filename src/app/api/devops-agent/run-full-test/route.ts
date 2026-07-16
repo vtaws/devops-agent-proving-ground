@@ -185,17 +185,16 @@ async function generateTemplate(bedrock: BedrockRuntimeClient, plan: any, region
     max_tokens: 6000,
     system: `Generate a MINIMAL, DEPLOYABLE CloudFormation YAML template that creates a broken AWS environment. Output ONLY raw YAML starting with AWSTemplateFormatVersion. No code fences. Keep costs minimal (t3.micro, small storage). Max 15 resources. The stack should deploy SUCCESSFULLY but leave infrastructure in a broken state where symptoms are observable.
 
-CRITICAL CFN RULES YOU MUST FOLLOW:
-- Every Outputs member MUST have a Value key (e.g. Value: !Ref ResourceName)
-- Do NOT use Aurora Serverless v1 (engine-mode serverless) — use provisioned db.t3.medium instead
-- Avoid resources that take >10 minutes to create (no Aurora clusters, no Neptune, no large RDS)
-- Use RDS db.t3.micro with PostgreSQL if you need a database
-- For PostgreSQL RDS, use EngineVersion: '16.4' (NOT 15.4, 15.3, or any old version)
-- For MySQL RDS, use EngineVersion: '8.0.35'
-- Lambda functions need a valid Runtime (python3.12) and a Handler (index.handler)
-- Security Groups need a VpcId
-- All !Ref targets must exist as Resources or Parameters in the template
-- Do NOT hardcode DBInstanceIdentifier — let CFN auto-generate it to avoid conflicts`,
+CRITICAL CFN RULES:
+- Every Outputs member MUST have a Value key
+- Do NOT use Aurora or Neptune (too slow to create)
+- For databases use: AWS::RDS::DBInstance with Engine: postgres, EngineVersion: '16.4', DBInstanceClass: db.t3.micro, AllocatedStorage: 20
+- Do NOT hardcode DBInstanceIdentifier (let CFN auto-generate)
+- Lambda Runtime: python3.12, Handler: index.handler
+- Security Groups need VpcId
+- All !Ref targets must exist in the template
+- Use simple resources: VPC, Subnets, Security Groups, IAM Roles, Lambda, S3, SQS, SNS, CloudWatch Logs
+- For simulating DB permission issues, use Lambda + Secrets Manager + RDS (not Aurora)`,
     messages: [{ role: "user", content: `Create broken environment:\nBROKEN STATE: ${plan.brokenState}\nROOT CAUSE: ${plan.rootCause}\nSYMPTOMS:\n${(plan.symptoms || []).join("\n")}\nRegion: ${region}` }],
   };
   const cmd = new InvokeModelCommand({ modelId: "us.anthropic.claude-sonnet-4-6", contentType: "application/json", accept: "application/json", body: JSON.stringify(payload) });
@@ -203,35 +202,61 @@ CRITICAL CFN RULES YOU MUST FOLLOW:
   const content = (JSON.parse(new TextDecoder().decode(r.body)).content[0]?.text || "").trim();
   let tpl = content.replace(/^```(?:yaml|yml|cloudformation)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
   if (!tpl.includes("AWSTemplateFormatVersion") && !tpl.includes("Resources:")) return null;
+
+  // Sanitize: fix known bad patterns deterministically
+  tpl = sanitizeTemplate(tpl);
   return tpl;
 }
 
+/** Fix known bad CFN patterns that cause deployment failures */
+function sanitizeTemplate(template: string): string {
+  let t = template;
+
+  // Fix PostgreSQL versions (only 16.x and 15.8+ are available)
+  t = t.replace(/EngineVersion:\s*['"]?1[45]\.\d['"]?/g, "EngineVersion: '16.4'");
+  t = t.replace(/EngineVersion:\s*['"]?13\.\d+['"]?/g, "EngineVersion: '16.4'");
+
+  // Fix MySQL versions
+  t = t.replace(/EngineVersion:\s*['"]?5\.7\.\d+['"]?/g, "EngineVersion: '8.0.35'");
+  t = t.replace(/EngineVersion:\s*['"]?8\.0\.\d{1,2}['"]?/g, "EngineVersion: '8.0.35'");
+
+  // Fix old Lambda runtimes
+  t = t.replace(/Runtime:\s*['"]?python3\.(9|10|11)['"]?/g, "Runtime: python3.12");
+  t = t.replace(/Runtime:\s*['"]?nodejs1[46]\.x['"]?/g, "Runtime: nodejs20.x");
+
+  // Fix Aurora engine modes that aren't available
+  t = t.replace(/EngineMode:\s*['"]?serverless['"]?/g, "EngineMode: provisioned");
+
+  // Remove hardcoded DBInstanceIdentifier (causes conflicts on retry)
+  t = t.replace(/^\s*DBInstanceIdentifier:.*$/gm, "");
+
+  return t;
+}
+
 async function validateAndFixTemplate(cfn: CloudFormationClient, bedrock: BedrockRuntimeClient, template: string, plan: any, region: string): Promise<string> {
-  // Try to validate
   const { ValidateTemplateCommand } = await import("@aws-sdk/client-cloudformation");
+
+  // First: local sanitization
+  template = sanitizeTemplate(template);
+
+  // Then: CFN validate
   try {
     await cfn.send(new ValidateTemplateCommand({ TemplateBody: template }));
-    return template; // Valid!
+    return template;
   } catch (e: any) {
     const error = e.message || String(e);
-    // Ask AI to fix
+    // Ask AI to fix structural issues
     const fixPayload = {
       anthropic_version: "bedrock-2023-05-31",
       max_tokens: 6000,
-      system: `Fix this CloudFormation template. Output ONLY corrected YAML starting with AWSTemplateFormatVersion. No explanation.
-
-COMMON FIXES:
-- "Cannot find version X for postgres" → use EngineVersion: '16.4'
-- "Cannot find version X for mysql" → use EngineVersion: '8.0.35'
-- "Every Outputs member must contain a Value" → add Value: !Ref or Value: !GetAtt to each Output
-- "Template format error" → check YAML indentation and structure
-- Do NOT hardcode DBInstanceIdentifier — remove it and let CFN auto-generate`,
-      messages: [{ role: "user", content: `ERROR: ${error}\n\nTEMPLATE:\n${template}\n\nFix and return corrected YAML only.` }],
+      system: `Fix this CloudFormation template. Output ONLY corrected YAML starting with AWSTemplateFormatVersion. No explanation. Use EngineVersion '16.4' for PostgreSQL, '8.0.35' for MySQL. Every Output needs a Value. Do NOT use Aurora.`,
+      messages: [{ role: "user", content: `ERROR: ${error}\n\nTEMPLATE:\n${template}\n\nFix and return YAML only.` }],
     };
     const cmd = new InvokeModelCommand({ modelId: "us.anthropic.claude-sonnet-4-6", contentType: "application/json", accept: "application/json", body: JSON.stringify(fixPayload) });
     const r = await bedrock.send(cmd);
-    const fixed = (JSON.parse(new TextDecoder().decode(r.body)).content[0]?.text || "").trim();
-    return fixed.replace(/^```(?:yaml|yml|cloudformation)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+    let fixed = (JSON.parse(new TextDecoder().decode(r.body)).content[0]?.text || "").trim();
+    fixed = fixed.replace(/^```(?:yaml|yml|cloudformation)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+    return sanitizeTemplate(fixed);
   }
 }
 
