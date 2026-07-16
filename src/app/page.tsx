@@ -26,7 +26,7 @@ interface SimPlan {
 }
 interface Scenario {
   id: string; case: RankedCase | SupportCase;
-  status: "generating" | "ready" | "deploying" | "deployed" | "verifying" | "verified" | "testing" | "complete" | "failed";
+  status: "generating" | "ready" | "deploying" | "complete" | "failed";
   plan?: SimPlan; deployResult?: any; verification?: any; agentResult?: any; metrics?: any; error?: string;
 }
 type InputMode = "auto" | "manual";
@@ -50,6 +50,10 @@ export default function DevOpsAgentProvingGround() {
   const [credText, setCredText] = useState("");
   const [credLoading, setCredLoading] = useState(false);
   const [credsValid, setCredsValid] = useState<boolean | null>(null);
+  // Session credentials (per-user, stored in browser only)
+  const [userCreds, setUserCreds] = useState<{accessKeyId: string; secretAccessKey: string; sessionToken: string} | null>(null);
+  const [userAccount, setUserAccount] = useState("");
+  const [targetAccount, setTargetAccount] = useState("");
 
   useEffect(() => { checkCreds(); fetchCustomers(); }, []);
 
@@ -71,13 +75,19 @@ export default function DevOpsAgentProvingGround() {
     if (!keyMatch || !secretMatch || !tokenMatch) {
       setError("Could not parse. Paste the full export block."); setCredLoading(false); return;
     }
+    const creds = { accessKeyId: keyMatch[1], secretAccessKey: secretMatch[1], sessionToken: tokenMatch[1] };
     try {
       const r = await fetch("/api/credentials/update", { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accessKeyId: keyMatch[1], secretAccessKey: secretMatch[1], sessionToken: tokenMatch[1] }),
+        body: JSON.stringify(creds),
       });
       const d = await r.json();
-      if (d.success) { setShowCredModal(false); setCredText(""); setCredsValid(true); setError(null); }
+      if (d.success) {
+        setShowCredModal(false); setCredText(""); setCredsValid(true); setError(null);
+        setUserCreds(creds);
+        setUserAccount(d.accountId || "");
+        if (!targetAccount) setTargetAccount(d.accountId || "");
+      }
       else setError(d.error);
     } catch (e: any) { setError(e.message); }
     finally { setCredLoading(false); }
@@ -141,98 +151,46 @@ export default function DevOpsAgentProvingGround() {
   const deployScenario = async (scenarioId: string) => {
     const scenario = scenarios.find((s) => s.id === scenarioId);
     if (!scenario?.plan) return;
+    if (!userCreds) { setShowCredModal(true); return; }
+
     setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "deploying" as const } : s));
 
     try {
-      // Step 1: Deploy broken environment
-      const r = await fetch("/api/devops-agent/deploy", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ simulationPlan: scenario.plan.simulationPlan, region: "us-east-1" }) });
-      const d = await r.json();
-      if (d.error) {
-        if (d.needsAuth) setShowCredModal(true);
-        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: d.error } : s));
-        return;
-      }
-
-      setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "deployed" as const, deployResult: d } : s));
-
-      // Step 2: Wait for stack to finish creating
-      await waitForStack(d.stackName, "us-east-1", scenarioId);
-
-      // Step 3: Verify symptoms are replicated
-      setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "verifying" as const } : s));
-
-      const verifyRes = await fetch("/api/devops-agent/verify", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stackName: d.stackName, region: "us-east-1", simulationPlan: scenario.plan.simulationPlan }) });
-      const verifyData = await verifyRes.json();
-
-      if (verifyData.error) {
-        if (verifyData.needsAuth) setShowCredModal(true);
-        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: verifyData.error } : s));
-        return;
-      }
-
-      setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "verified" as const, verification: verifyData } : s));
-
-      // If not replicated, stop here
-      if (verifyData.status === "NOT_REPLICATED") {
-        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, verification: verifyData, error: `Issue not replicated: ${verifyData.message}` } : s));
-        return;
-      }
-
-      // Step 4: Invoke DevOps Agent
-      setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "testing" as const } : s));
-
-      const agentRes = await fetch("/api/devops-agent/invoke-agent", { method: "POST",
+      const r = await fetch("/api/devops-agent/run-full-test", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          stackName: d.stackName,
+          caseData: scenario.case,
+          simulationPlan: scenario.plan.simulationPlan,
+          credentials: userCreds,
+          accountId: targetAccount,
           region: "us-east-1",
-          simulationPlan: {
-            ...scenario.plan.simulationPlan,
-            humanBaselineHours: scenario.case.resolutionTimeHours || scenario.plan.evaluation?.humanBaselineHours || 2,
-          },
-        }) });
-      const agentData = await agentRes.json();
+          cleanup: false,
+        }),
+      });
+      const d = await r.json();
 
-      if (agentData.error) {
-        if (agentData.needsAuth) setShowCredModal(true);
-        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: `Agent: ${agentData.error}` } : s));
+      if (d.error) {
+        if (d.needsAuth) setShowCredModal(true);
+        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: d.error, deployResult: d } : s));
         return;
       }
 
-      // Step 5: Complete
       setScenarios((p) => p.map((s) => s.id === scenarioId ? {
-        ...s, status: "complete" as const, agentResult: agentData.agentDiagnosis,
-        metrics: { ...agentData.metrics, evaluation: agentData.evaluation },
+        ...s,
+        status: "complete" as const,
+        deployResult: { stackName: d.stackName, template: d.template, account: d.account },
+        agentResult: d.diagnosis,
+        metrics: d.metrics,
+        verification: { steps: d.steps, totalTimeSeconds: d.totalTimeSeconds },
       } : s));
-
     } catch (e: any) {
       setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: e.message } : s));
     }
   };
 
-  // Poll stack until CREATE_COMPLETE or failure
-  const waitForStack = async (stackName: string, region: string, scenarioId: string) => {
-    for (let i = 0; i < 20; i++) { // max 5 minutes (20 x 15s)
-      await new Promise((r) => setTimeout(r, 15000));
-      try {
-        const r = await fetch("/api/devops-agent/deploy", { method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "status", stackName, region }) });
-        const d = await r.json();
-        if (d.status === "CREATE_COMPLETE") return;
-        if (d.status?.includes("FAILED") || d.status?.includes("ROLLBACK")) {
-          throw new Error(`Stack failed: ${d.status}`);
-        }
-      } catch (e: any) {
-        if (e.message.includes("Stack failed")) throw e;
-      }
-    }
-    // If we get here, stack took too long but we'll proceed with verification anyway
-  };
+  // Poll not needed anymore — run-full-test does everything in one call
+  
 
   const handleManualSimulate = () => {
     if (!manualSubject.trim()) { setError("Enter a case subject"); return; }
@@ -252,8 +210,16 @@ export default function DevOpsAgentProvingGround() {
             <p className="text-gray-400 text-xs mt-1">Fetch real cases → AI generates broken infra → Deploy to your account → Test DevOps Agent</p>
           </div>
           <div className="flex items-center gap-3">
-            {credsValid === true && <span className="text-green-400 text-xs">✓ Authenticated</span>}
+            {credsValid === true && <span className="text-green-400 text-xs">✓ {userAccount || "Authenticated"}</span>}
             {credsValid === false && <button onClick={() => setShowCredModal(true)} className="text-red-400 text-xs underline">⚠️ Credentials expired</button>}
+            {credsValid === true && (
+              <input className="bg-gray-800 text-gray-200 text-xs px-2 py-1 rounded border border-gray-600 w-32"
+                placeholder="Target Account"
+                value={targetAccount}
+                onChange={(e) => setTargetAccount(e.target.value.replace(/\D/g, "").slice(0, 12))}
+                title="12-digit AWS account to deploy into"
+              />
+            )}
           </div>
         </div>
       </div>
@@ -347,50 +313,19 @@ export default function DevOpsAgentProvingGround() {
                       ))}
                     </div>
                     <button onClick={() => deployScenario(s.id)} className="btn-primary w-full py-3 text-base">
-                      🚀 Deploy Broken Environment to Account
+                      🚀 Run Full Test (Deploy → Agent → Metrics)
                     </button>
                   </div>
                 )}
 
-                {s.status === "deploying" && <div className="text-orange-600 text-sm animate-pulse mt-3">🚀 Deploying broken infrastructure to your account...</div>}
-
-                {s.status === "deployed" && <div className="text-orange-600 text-sm animate-pulse mt-3">⏳ Waiting for stack to finish creating (polling every 15s)...</div>}
-
-                {s.status === "verifying" && (
-                  <div className="mt-3 p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                    <div className="flex items-center gap-2 text-amber-700 text-sm animate-pulse">
-                      <span className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin inline-block"/>
-                      Verifying issue was replicated correctly...
+                {s.status === "deploying" && (
+                  <div className="mt-3 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                    <div className="flex items-center gap-2 text-blue-700 text-sm animate-pulse">
+                      <span className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin inline-block"/>
+                      Running full test pipeline...
                     </div>
-                    <p className="text-xs text-amber-600 mt-1">Checking deployed resources match expected symptoms</p>
-                  </div>
-                )}
-
-                {s.status === "verified" && s.verification && (
-                  <div className="mt-3 p-4 bg-green-50 border border-green-200 rounded-lg">
-                    <p className="text-green-800 font-medium text-sm">
-                      {s.verification.status === "CONFIRMED" ? "✅ Issue Replicated" : "⚠️ Partially Replicated"}
-                      <span className="text-xs font-normal ml-2 text-green-600">(confidence: {s.verification.confidence})</span>
-                    </p>
-                    <p className="text-xs text-green-700 mt-1">{s.verification.message}</p>
-                    {s.verification.symptomsConfirmed?.length > 0 && (
-                      <div className="mt-2"><p className="text-[10px] font-bold text-green-700">✓ Confirmed:</p>
-                        <ul className="text-xs text-green-800 mt-1">{s.verification.symptomsConfirmed.map((sym: string, i: number) => <li key={i}>• {sym}</li>)}</ul></div>
-                    )}
-                    {s.verification.symptomsNotConfirmed?.length > 0 && (
-                      <div className="mt-2"><p className="text-[10px] font-bold text-amber-700">⚠ Not confirmed:</p>
-                        <ul className="text-xs text-amber-800 mt-1">{s.verification.symptomsNotConfirmed.map((sym: string, i: number) => <li key={i}>• {sym}</li>)}</ul></div>
-                    )}
-                  </div>
-                )}
-
-                {s.status === "testing" && (
-                  <div className="mt-3 p-4 bg-purple-50 border border-purple-200 rounded-lg">
-                    <div className="flex items-center gap-2 text-purple-700 text-sm animate-pulse">
-                      <span className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin inline-block"/>
-                      DevOps Agent is diagnosing the broken environment...
-                    </div>
-                    <p className="text-xs text-purple-600 mt-2">Inspecting stack resources, checking configurations, analyzing symptoms...</p>
+                    <p className="text-xs text-blue-600 mt-2">Deploy CFN → Wait for stack → Inspect resources → Run DevOps Agent → Calculate savings</p>
+                    <p className="text-[10px] text-blue-500 mt-1">This may take 2-5 minutes depending on stack complexity</p>
                   </div>
                 )}
 
@@ -531,7 +466,7 @@ export default function DevOpsAgentProvingGround() {
 }
 
 function StatusBadge({ status }: { status: Scenario["status"] }) {
-  const c: Record<string, string> = { generating: "text-purple-600", ready: "text-blue-600", deploying: "text-orange-600", deployed: "text-orange-600", verifying: "text-amber-600", verified: "text-green-600", testing: "text-purple-600", complete: "text-green-600", failed: "text-red-600" };
-  const t: Record<string, string> = { generating: "⏳ Generating...", ready: "✓ Plan Ready", deploying: "🚀 Deploying...", deployed: "⏳ Stack Creating...", verifying: "🔍 Verifying...", verified: "✅ Verified", testing: "🤖 Agent Testing...", complete: "✅ Complete", failed: "❌ Failed" };
-  return <span className={`text-xs font-medium ${c[status] || ""} ${["generating", "deploying", "deployed", "verifying", "testing"].includes(status) ? "animate-pulse" : ""}`}>{t[status]}</span>;
+  const c: Record<string, string> = { generating: "text-purple-600", ready: "text-blue-600", deploying: "text-orange-600", complete: "text-green-600", failed: "text-red-600" };
+  const t: Record<string, string> = { generating: "⏳ Generating Plan...", ready: "✓ Plan Ready", deploying: "🔄 Running Full Test...", complete: "✅ Complete", failed: "❌ Failed" };
+  return <span className={`text-xs font-medium ${c[status] || ""} ${["generating", "deploying"].includes(status) ? "animate-pulse" : ""}`}>{t[status]}</span>;
 }
