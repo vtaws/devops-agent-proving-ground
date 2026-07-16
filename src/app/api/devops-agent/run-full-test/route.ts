@@ -61,11 +61,15 @@ export async function POST(request: NextRequest) {
     results.steps.push({ step: "auth", status: "ok", account: actualAccount, arn: identity.Arn });
 
     // Step 2: Generate CFN template
-    const template = await generateTemplate(bedrock, simulationPlan, region);
+    let template = await generateTemplate(bedrock, simulationPlan, region);
     if (!template) {
       return jsonResponse({ error: "Failed to generate CFN template", steps: results.steps }, 500);
     }
     results.steps.push({ step: "generate", status: "ok", templateLines: template.split("\n").length });
+
+    // Step 2b: Validate and fix template if needed
+    template = await validateAndFixTemplate(cfn, bedrock, template, simulationPlan, region);
+    results.steps.push({ step: "validate", status: "ok" });
 
     // Step 3: Deploy
     const stackName = `devops-sim-${Date.now().toString(36)}`;
@@ -149,7 +153,16 @@ async function generateTemplate(bedrock: BedrockRuntimeClient, plan: any, region
   const payload = {
     anthropic_version: "bedrock-2023-05-31",
     max_tokens: 6000,
-    system: `Generate a MINIMAL, DEPLOYABLE CloudFormation YAML template that creates a broken AWS environment. Output ONLY raw YAML starting with AWSTemplateFormatVersion. No code fences. Keep costs minimal (t3.micro, small storage). Max 15 resources. The stack should deploy SUCCESSFULLY but leave infrastructure in a broken state where symptoms are observable.`,
+    system: `Generate a MINIMAL, DEPLOYABLE CloudFormation YAML template that creates a broken AWS environment. Output ONLY raw YAML starting with AWSTemplateFormatVersion. No code fences. Keep costs minimal (t3.micro, small storage). Max 15 resources. The stack should deploy SUCCESSFULLY but leave infrastructure in a broken state where symptoms are observable.
+
+CRITICAL CFN RULES YOU MUST FOLLOW:
+- Every Outputs member MUST have a Value key (e.g. Value: !Ref ResourceName)
+- Do NOT use Aurora Serverless v1 (engine-mode serverless) — use provisioned db.t3.medium instead
+- Avoid resources that take >10 minutes to create (no Aurora clusters, no Neptune, no large RDS)
+- Use RDS db.t3.micro with PostgreSQL if you need a database
+- Lambda functions need a valid Runtime (python3.11) and a Handler
+- Security Groups need a VpcId
+- All !Ref targets must exist as Resources or Parameters in the template`,
     messages: [{ role: "user", content: `Create broken environment:\nBROKEN STATE: ${plan.brokenState}\nROOT CAUSE: ${plan.rootCause}\nSYMPTOMS:\n${(plan.symptoms || []).join("\n")}\nRegion: ${region}` }],
   };
   const cmd = new InvokeModelCommand({ modelId: "us.anthropic.claude-sonnet-4-6", contentType: "application/json", accept: "application/json", body: JSON.stringify(payload) });
@@ -158,6 +171,28 @@ async function generateTemplate(bedrock: BedrockRuntimeClient, plan: any, region
   let tpl = content.replace(/^```(?:yaml|yml|cloudformation)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
   if (!tpl.includes("AWSTemplateFormatVersion") && !tpl.includes("Resources:")) return null;
   return tpl;
+}
+
+async function validateAndFixTemplate(cfn: CloudFormationClient, bedrock: BedrockRuntimeClient, template: string, plan: any, region: string): Promise<string> {
+  // Try to validate
+  const { ValidateTemplateCommand } = await import("@aws-sdk/client-cloudformation");
+  try {
+    await cfn.send(new ValidateTemplateCommand({ TemplateBody: template }));
+    return template; // Valid!
+  } catch (e: any) {
+    const error = e.message || String(e);
+    // Ask AI to fix
+    const fixPayload = {
+      anthropic_version: "bedrock-2023-05-31",
+      max_tokens: 6000,
+      system: "Fix this CloudFormation template. The error is shown below. Output ONLY the corrected YAML, no explanation. Start with AWSTemplateFormatVersion.",
+      messages: [{ role: "user", content: `ERROR: ${error}\n\nBROKEN TEMPLATE:\n${template}\n\nFix the error and return corrected YAML only.` }],
+    };
+    const cmd = new InvokeModelCommand({ modelId: "us.anthropic.claude-sonnet-4-6", contentType: "application/json", accept: "application/json", body: JSON.stringify(fixPayload) });
+    const r = await bedrock.send(cmd);
+    const fixed = (JSON.parse(new TextDecoder().decode(r.body)).content[0]?.text || "").trim();
+    return fixed.replace(/^```(?:yaml|yml|cloudformation)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+  }
 }
 
 async function waitForStack(cfn: CloudFormationClient, stackName: string): Promise<string> {
