@@ -346,8 +346,10 @@ async function invokeRealDevOpsAgent(
 
   const taskResponse = await client.send(new CreateBacklogTaskCommand({
     agentSpaceId,
+    taskType: "INVESTIGATION",
     title: `Investigate: ${plan.title || stackName}`,
     description: taskDescription,
+    priority: "HIGH",
   } as any));
 
   const taskId = (taskResponse as any).taskId || (taskResponse as any).backlogTaskId || (taskResponse as any).backlogTask?.taskId;
