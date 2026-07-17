@@ -352,9 +352,9 @@ async function invokeRealDevOpsAgent(
     priority: "HIGH",
   } as any));
 
-  const taskId = (taskResponse as any).taskId || (taskResponse as any).backlogTaskId || (taskResponse as any).backlogTask?.taskId;
+  const taskId = (taskResponse as any).task?.taskId || (taskResponse as any).taskId || (taskResponse as any).backlogTaskId || (taskResponse as any).backlogTask?.taskId;
   if (!taskId) {
-    return { status: "FAILED", summary: "Could not create backlog task — check DevOps Agent permissions", journal: null };
+    return { status: "FAILED", summary: `Could not extract taskId from response: ${JSON.stringify(taskResponse).slice(0, 200)}`, journal: null };
   }
 
   // Poll for completion (max 5 minutes)
@@ -363,8 +363,8 @@ async function invokeRealDevOpsAgent(
     await new Promise((r) => setTimeout(r, 10000));
     try {
       const taskStatus = await client.send(new GetBacklogTaskCommand({ agentSpaceId, taskId } as any));
-      status = (taskStatus as any).status || (taskStatus as any).backlogTask?.status || "IN_PROGRESS";
-      if (status !== "IN_PROGRESS" && status !== "PENDING") break;
+      status = (taskStatus as any).task?.status || (taskStatus as any).status || (taskStatus as any).backlogTask?.status || "IN_PROGRESS";
+      if (status !== "IN_PROGRESS" && status !== "PENDING_START" && status !== "PENDING_TRIAGE") break;
     } catch { /* keep polling */ }
   }
 
