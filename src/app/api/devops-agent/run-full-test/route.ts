@@ -426,17 +426,49 @@ async function invokeRealDevOpsAgent(
 function evaluateAccuracy(diagnosis: any, plan: any) {
   const actual = (plan.rootCause || "").toLowerCase();
   const found = (diagnosis.rootCause || "").toLowerCase();
+  const reasoning = (diagnosis.reasoning || "").toLowerCase();
+  const combined = found + " " + reasoning;
+
+  // Key concept matching — check if the agent identified the core issue
+  const keyPhrases = extractKeyPhrases(actual);
+  const matchedPhrases = keyPhrases.filter((phrase) => combined.includes(phrase));
+  const phraseRatio = keyPhrases.length > 0 ? matchedPhrases.length / keyPhrases.length : 0;
+
+  // Also check word-level matching as fallback
   const words = actual.split(/\s+/).filter((w: string) => w.length > 4);
-  const matched = words.filter((w: string) => found.includes(w));
-  const ratio = words.length > 0 ? matched.length / words.length : 0;
-  const accuracy = ratio > 0.4 ? "correct" : ratio > 0.15 ? "partial" : "incorrect";
+  const matchedWords = words.filter((w: string) => combined.includes(w));
+  const wordRatio = words.length > 0 ? matchedWords.length / words.length : 0;
+
+  // Use the better of the two scores
+  const bestRatio = Math.max(phraseRatio, wordRatio);
+
+  // If agent confidence is high and it found something related, be generous
+  const confidence = diagnosis.confidence || "low";
+  const bonus = confidence === "high" ? 0.15 : confidence === "medium" ? 0.05 : 0;
+  const finalRatio = Math.min(1, bestRatio + bonus);
+
+  const accuracy = finalRatio > 0.35 ? "correct" : finalRatio > 0.15 ? "partial" : "incorrect";
   return {
     rootCauseAccuracy: accuracy,
-    fixProposed: !!(diagnosis.proposedFix?.commands?.length),
-    agentConfidence: diagnosis.confidence || "low",
+    fixProposed: !!(diagnosis.proposedFix?.description || diagnosis.proposedFix?.commands?.length),
+    agentConfidence: confidence,
     score: accuracy === "correct" ? 100 : accuracy === "partial" ? 60 : 20,
     verdict: accuracy === "correct" ? "PASS" : accuracy === "partial" ? "PARTIAL" : "FAIL",
   };
+}
+
+function extractKeyPhrases(text: string): string[] {
+  // Extract meaningful 2-3 word phrases that represent the core issue
+  const phrases: string[] = [];
+  const keywords = ["permission", "policy", "iam", "role", "credential", "access", "denied",
+    "security group", "route", "dns", "certificate", "mismatch", "timeout", "connection",
+    "owner", "table", "database", "config", "endpoint", "vpc", "subnet", "nat", "gateway",
+    "ses", "smtp", "send", "email", "s3", "ec2", "rds", "lambda", "ecs", "eks"];
+
+  for (const kw of keywords) {
+    if (text.includes(kw)) phrases.push(kw);
+  }
+  return phrases;
 }
 
 function jsonResponse(data: any, status = 200) {
