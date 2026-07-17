@@ -12,6 +12,7 @@ import {
   DeleteStackCommand,
 } from "@aws-sdk/client-cloudformation";
 import { STSClient, GetCallerIdentityCommand } from "@aws-sdk/client-sts";
+import { IAMClient, CreateRoleCommand, AttachRolePolicyCommand, GetRoleCommand } from "@aws-sdk/client-iam";
 import {
   DevOpsAgentClient,
   ListAgentSpacesCommand,
@@ -19,6 +20,8 @@ import {
   CreateBacklogTaskCommand,
   GetBacklogTaskCommand,
   ListJournalRecordsCommand,
+  ListAssociationsCommand,
+  AssociateServiceCommand,
 } from "@aws-sdk/client-devops-agent";
 
 /**
@@ -58,6 +61,7 @@ export async function POST(request: NextRequest) {
   const cfn = new CloudFormationClient({ region, credentials: creds });
   const bedrock = new BedrockRuntimeClient({ region: "us-east-1", credentials: creds });
   const sts = new STSClient({ region: "us-east-1", credentials: creds });
+  const iam = new IAMClient({ region: "us-east-1", credentials: creds });
 
   const results: any = { steps: [], startTime: Date.now() };
 
@@ -136,9 +140,9 @@ export async function POST(request: NextRequest) {
       return jsonResponse({ ...results, error: `Stack failed: ${reason}`, template }, 200);
     }
 
-    // Step 5: Setup DevOps Agent (check/create Agent Space)
+    // Step 5: Setup DevOps Agent (check/create Agent Space + IAM role + account association)
     const devopsAgent = new DevOpsAgentClient({ region, credentials: creds });
-    let agentSpaceId = await getOrCreateAgentSpace(devopsAgent);
+    let agentSpaceId = await setupDevOpsAgent(devopsAgent, iam, actualAccount || "", region);
     results.steps.push({ step: "agent_setup", status: "ok", agentSpaceId });
 
     // Step 6: Invoke REAL DevOps Agent via CreateBacklogTask
@@ -317,22 +321,92 @@ async function gatherState(cfn: CloudFormationClient, stackName: string) {
   return { stackStatus, resources, outputs, events };
 }
 
-async function getOrCreateAgentSpace(client: DevOpsAgentClient): Promise<string> {
-  // Check if an Agent Space already exists
+async function setupDevOpsAgent(client: DevOpsAgentClient, iam: IAMClient, accountId: string, region: string): Promise<string> {
+  const ROLE_NAME = "DevOpsAgentRole-AgentSpace";
+
+  // 1. Check if Agent Space exists
+  let agentSpaceId = "";
   try {
     const list = await client.send(new ListAgentSpacesCommand({}));
     const spaces = (list as any).agentSpaces || [];
     if (spaces.length > 0) {
-      return spaces[0].agentSpaceId;
+      agentSpaceId = spaces[0].agentSpaceId;
     }
   } catch { /* no spaces */ }
 
-  // Create one
-  const created = await client.send(new CreateAgentSpaceCommand({
-    name: "devops-proving-ground",
-    description: "Auto-created by DevOps Agent Proving Ground for infrastructure diagnosis testing",
-  } as any));
-  return (created as any).agentSpace?.agentSpaceId || "";
+  // 2. Create Agent Space if needed
+  if (!agentSpaceId) {
+    const created = await client.send(new CreateAgentSpaceCommand({
+      name: "devops-proving-ground",
+      description: "Auto-created by DevOps Agent Proving Ground for infrastructure diagnosis testing",
+    } as any));
+    agentSpaceId = (created as any).agentSpace?.agentSpaceId || "";
+  }
+
+  // 3. Ensure IAM role exists
+  try {
+    await iam.send(new GetRoleCommand({ RoleName: ROLE_NAME }));
+  } catch {
+    // Role doesn't exist — create it
+    const trustPolicy = JSON.stringify({
+      Version: "2012-10-17",
+      Statement: [{
+        Effect: "Allow",
+        Principal: { Service: "aidevops.amazonaws.com" },
+        Action: "sts:AssumeRole",
+        Condition: {
+          StringEquals: { "aws:SourceAccount": accountId },
+          ArnLike: { "aws:SourceArn": `arn:aws:aidevops:${region}:${accountId}:agentspace/*` },
+        },
+      }],
+    });
+    try {
+      await iam.send(new CreateRoleCommand({
+        RoleName: ROLE_NAME,
+        AssumeRolePolicyDocument: trustPolicy,
+      }));
+    } catch { /* role might exist from concurrent call */ }
+  }
+
+  // 4. Attach policies (idempotent — no error if already attached)
+  try {
+    await iam.send(new AttachRolePolicyCommand({
+      RoleName: ROLE_NAME,
+      PolicyArn: "arn:aws:iam::aws:policy/AIDevOpsAgentAccessPolicy",
+    }));
+  } catch { /* already attached or doesn't exist yet */ }
+
+  try {
+    await iam.send(new AttachRolePolicyCommand({
+      RoleName: ROLE_NAME,
+      PolicyArn: "arn:aws:iam::aws:policy/ReadOnlyAccess",
+    }));
+  } catch { /* already attached */ }
+
+  // 5. Associate account (check first, then associate if missing)
+  try {
+    const assocList = await client.send(new ListAssociationsCommand({ agentSpaceId } as any));
+    const associations = (assocList as any).associations || [];
+    const hasAws = associations.some((a: any) => a.serviceId === "aws");
+
+    if (!hasAws) {
+      // Wait a few seconds for IAM role to propagate
+      await new Promise((r) => setTimeout(r, 5000));
+      await client.send(new AssociateServiceCommand({
+        agentSpaceId,
+        serviceId: "aws",
+        configuration: {
+          aws: {
+            assumableRoleArn: `arn:aws:iam::${accountId}:role/${ROLE_NAME}`,
+            accountId,
+            accountType: "monitor",
+          },
+        },
+      } as any));
+    }
+  } catch { /* association might already exist */ }
+
+  return agentSpaceId;
 }
 
 async function invokeRealDevOpsAgent(
