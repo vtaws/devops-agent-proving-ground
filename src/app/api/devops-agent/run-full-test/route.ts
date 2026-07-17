@@ -12,6 +12,14 @@ import {
   DeleteStackCommand,
 } from "@aws-sdk/client-cloudformation";
 import { STSClient, GetCallerIdentityCommand } from "@aws-sdk/client-sts";
+import {
+  DevOpsAgentClient,
+  ListAgentSpacesCommand,
+  CreateAgentSpaceCommand,
+  CreateBacklogTaskCommand,
+  GetBacklogTaskCommand,
+  ListJournalRecordsCommand,
+} from "@aws-sdk/client-devops-agent";
 
 /**
  * POST /api/devops-agent/run-full-test
@@ -128,15 +136,21 @@ export async function POST(request: NextRequest) {
       return jsonResponse({ ...results, error: `Stack failed: ${reason}`, template }, 200);
     }
 
-    // Step 5: Gather real environment state
-    const envState = await gatherState(cfn, stackName);
-    results.steps.push({ step: "inspect", status: "ok", resourceCount: envState.resources.length });
+    // Step 5: Setup DevOps Agent (check/create Agent Space)
+    const devopsAgent = new DevOpsAgentClient({ region, credentials: creds });
+    let agentSpaceId = await getOrCreateAgentSpace(devopsAgent);
+    results.steps.push({ step: "agent_setup", status: "ok", agentSpaceId });
 
-    // Step 6: Run DevOps Agent diagnosis
+    // Step 6: Invoke REAL DevOps Agent via CreateBacklogTask
     const agentStart = Date.now();
-    const diagnosis = await runAgent(bedrock, envState, simulationPlan, region);
+    const taskResult = await invokeRealDevOpsAgent(
+      devopsAgent, agentSpaceId, stackName, simulationPlan, region
+    );
     const agentTimeSeconds = Math.round((Date.now() - agentStart) / 1000);
-    results.steps.push({ step: "agent", status: "ok", agentTimeSeconds });
+    results.steps.push({ step: "agent", status: taskResult.status === "COMPLETED" ? "ok" : "warning", agentTimeSeconds });
+
+    // Extract diagnosis from journal records
+    const diagnosis = taskResult.journal || { rootCause: taskResult.summary || "Agent completed but no journal", confidence: "medium" };
 
     // Step 7: Evaluate
     const humanHours = caseData?.resolutionTimeHours || simulationPlan.humanBaselineHours || 2;
@@ -303,18 +317,80 @@ async function gatherState(cfn: CloudFormationClient, stackName: string) {
   return { stackStatus, resources, outputs, events };
 }
 
-async function runAgent(bedrock: BedrockRuntimeClient, envState: any, plan: any, region: string) {
-  const payload = {
-    anthropic_version: "bedrock-2023-05-31",
-    max_tokens: 2000,
-    system: `You are a DevOps Diagnostic Agent. Given real AWS infrastructure state, diagnose the root cause. Be systematic: check resource statuses, security groups, IAM, connectivity. Return JSON: {"identifiedSymptoms":[...],"rootCause":"...","confidence":"high|medium|low","proposedFix":{"description":"...","commands":["..."]},"reasoning":"...","toolsUsed":["describe_stack","check_security_groups"]}`,
-    messages: [{ role: "user", content: `ENVIRONMENT:\nStack: ${envState.stackStatus}\nResources:\n${envState.resources.map((r: any) => `  ${r.logicalId} [${r.type}] → ${r.physicalId} (${r.status})`).join("\n")}\nOutputs:\n${envState.outputs.map((o: any) => `  ${o.key}: ${o.value}`).join("\n") || "none"}\nEvents:\n${envState.events.map((e: any) => `  ${e.resource}: ${e.status} ${e.reason}`).join("\n")}\n\nSYMPTOMS: ${(plan.symptoms || []).join(", ")}\nEXPECTED ISSUE: ${plan.brokenState}\n\nDiagnose. Return JSON only.` }],
-  };
-  const cmd = new InvokeModelCommand({ modelId: "us.anthropic.claude-sonnet-4-6", contentType: "application/json", accept: "application/json", body: JSON.stringify(payload) });
-  const r = await bedrock.send(cmd);
-  const content = (JSON.parse(new TextDecoder().decode(r.body)).content[0]?.text || "").trim();
-  try { return JSON.parse(content.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "")); }
-  catch { return { rootCause: content.slice(0, 500), confidence: "low" }; }
+async function getOrCreateAgentSpace(client: DevOpsAgentClient): Promise<string> {
+  // Check if an Agent Space already exists
+  try {
+    const list = await client.send(new ListAgentSpacesCommand({}));
+    const spaces = (list as any).agentSpaces || [];
+    if (spaces.length > 0) {
+      return spaces[0].agentSpaceId;
+    }
+  } catch { /* no spaces */ }
+
+  // Create one
+  const created = await client.send(new CreateAgentSpaceCommand({
+    name: "devops-proving-ground",
+    description: "Auto-created by DevOps Agent Proving Ground for infrastructure diagnosis testing",
+  } as any));
+  return (created as any).agentSpace?.agentSpaceId || "";
+}
+
+async function invokeRealDevOpsAgent(
+  client: DevOpsAgentClient,
+  agentSpaceId: string,
+  stackName: string,
+  plan: any,
+  region: string
+): Promise<{ status: string; summary: string; journal: any }> {
+  const taskDescription = `Investigate broken infrastructure in CloudFormation stack "${stackName}" in region ${region}.\n\nReported symptoms:\n${(plan.symptoms || []).map((s: string) => "- " + s).join("\n")}\n\nExpected broken state: ${plan.brokenState}\n\nPlease identify the root cause and propose a fix.`;
+
+  const taskResponse = await client.send(new CreateBacklogTaskCommand({
+    agentSpaceId,
+    title: `Investigate: ${plan.title || stackName}`,
+    description: taskDescription,
+  } as any));
+
+  const taskId = (taskResponse as any).taskId || (taskResponse as any).backlogTaskId || (taskResponse as any).backlogTask?.taskId;
+  if (!taskId) {
+    return { status: "FAILED", summary: "Could not create backlog task — check DevOps Agent permissions", journal: null };
+  }
+
+  // Poll for completion (max 5 minutes)
+  let status = "IN_PROGRESS";
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 10000));
+    try {
+      const taskStatus = await client.send(new GetBacklogTaskCommand({ agentSpaceId, taskId } as any));
+      status = (taskStatus as any).status || (taskStatus as any).backlogTask?.status || "IN_PROGRESS";
+      if (status !== "IN_PROGRESS" && status !== "PENDING") break;
+    } catch { /* keep polling */ }
+  }
+
+  // Get journal records
+  let journal: any = null;
+  let summary = "";
+  try {
+    const records = await client.send(new ListJournalRecordsCommand({ agentSpaceId, taskId } as any));
+    const entries = (records as any).journalRecords || (records as any).records || [];
+    if (entries.length > 0) {
+      summary = entries.map((e: any) => e.content || e.text || e.message || "").join("\n");
+      journal = {
+        rootCause: summary.slice(0, 1000),
+        confidence: status === "COMPLETED" ? "high" : "medium",
+        identifiedSymptoms: entries.filter((e: any) => (e.type || "").includes("SYMPTOM")).map((e: any) => e.content || e.text),
+        proposedFix: { description: entries.find((e: any) => (e.content || "").toLowerCase().includes("fix"))?.content || "", commands: [] },
+        reasoning: summary,
+        source: "AWS DevOps Agent (real product)",
+        taskId,
+      };
+    }
+  } catch (e: any) { summary = `Journal error: ${e.message}`; }
+
+  if (!journal) {
+    journal = { rootCause: `DevOps Agent investigation ${status}. ${summary}`, confidence: status === "COMPLETED" ? "medium" : "low", source: "AWS DevOps Agent (real product)", taskId };
+  }
+
+  return { status, summary, journal };
 }
 
 function evaluateAccuracy(diagnosis: any, plan: any) {
