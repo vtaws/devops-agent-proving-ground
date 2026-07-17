@@ -55,7 +55,26 @@ export default function DevOpsAgentProvingGround() {
   const [userAccount, setUserAccount] = useState("");
   const [targetAccount, setTargetAccount] = useState("");
 
-  useEffect(() => { checkCreds(); fetchCustomers(); }, []);
+  useEffect(() => { checkCreds(); fetchCustomers(); loadHistory(); }, []);
+
+  // Persist scenarios to localStorage
+  useEffect(() => {
+    if (scenarios.length > 0) {
+      try { localStorage.setItem("devops-proving-ground-history", JSON.stringify(scenarios)); } catch {}
+    }
+  }, [scenarios]);
+
+  const loadHistory = () => {
+    try {
+      const saved = localStorage.getItem("devops-proving-ground-history");
+      if (saved) setScenarios(JSON.parse(saved));
+    } catch {}
+  };
+
+  const clearHistory = () => {
+    localStorage.removeItem("devops-proving-ground-history");
+    setScenarios([]);
+  };
 
   const checkCreds = async () => {
     try {
@@ -284,7 +303,10 @@ export default function DevOpsAgentProvingGround() {
         {/* Simulations Section */}
         {scenarios.length > 0 && (
           <div className="space-y-4 mb-6" id="sim-section">
-            <h2 className="font-semibold text-lg">🧪 Simulations</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-lg">🧪 Simulations ({scenarios.length})</h2>
+              <button onClick={clearHistory} className="text-xs text-gray-400 hover:text-red-500">🗑️ Clear History</button>
+            </div>
             {scenarios.map((s) => (
               <div key={s.id} className="card border-l-4 border-l-blue-500">
                 <div className="flex items-start justify-between mb-2">
