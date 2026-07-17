@@ -181,7 +181,7 @@ export default function DevOpsAgentProvingGround() {
         status: "complete" as const,
         deployResult: { stackName: d.stackName, template: d.template, account: d.account },
         agentResult: d.diagnosis,
-        metrics: d.metrics,
+        metrics: { ...d.metrics, evaluation: d.evaluation || {} },
         verification: { steps: d.steps, totalTimeSeconds: d.totalTimeSeconds },
       } : s));
     } catch (e: any) {
@@ -357,15 +357,15 @@ export default function DevOpsAgentProvingGround() {
 
                     {/* Verdict */}
                     <div className={`p-4 rounded-lg border ${
-                      s.metrics.evaluation.verdict === "PASS" ? "bg-green-50 border-green-300" :
-                      s.metrics.evaluation.verdict === "PARTIAL" ? "bg-yellow-50 border-yellow-300" :
+                      s.metrics?.evaluation?.verdict === "PASS" ? "bg-green-50 border-green-300" :
+                      s.metrics?.evaluation?.verdict === "PARTIAL" ? "bg-yellow-50 border-yellow-300" :
                       "bg-red-50 border-red-300"
                     }`}>
                       <div className="flex items-center justify-between">
                         <div>
-                          <span className="text-lg mr-2">{s.metrics.evaluation.verdict === "PASS" ? "✅" : s.metrics.evaluation.verdict === "PARTIAL" ? "⚠️" : "❌"}</span>
-                          <span className="font-bold text-sm">{s.metrics.evaluation.verdict}</span>
-                          <span className="text-xs ml-2 text-gray-600">— Root cause: {s.metrics.evaluation.rootCauseAccuracy} | Confidence: {s.metrics.evaluation.agentConfidence} | Score: {s.metrics.evaluation.score}/100</span>
+                          <span className="text-lg mr-2">{s.metrics?.evaluation?.verdict === "PASS" ? "✅" : s.metrics?.evaluation?.verdict === "PARTIAL" ? "⚠️" : "❌"}</span>
+                          <span className="font-bold text-sm">{s.metrics?.evaluation?.verdict}</span>
+                          <span className="text-xs ml-2 text-gray-600">— Root cause: {s.metrics?.evaluation?.rootCauseAccuracy} | Confidence: {s.metrics?.evaluation?.agentConfidence} | Score: {s.metrics?.evaluation?.score}/100</span>
                         </div>
                       </div>
                     </div>
