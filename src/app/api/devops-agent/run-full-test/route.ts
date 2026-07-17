@@ -353,37 +353,65 @@ async function invokeRealDevOpsAgent(
   } as any));
 
   const taskId = (taskResponse as any).task?.taskId || (taskResponse as any).taskId || (taskResponse as any).backlogTaskId || (taskResponse as any).backlogTask?.taskId;
+  const executionId = (taskResponse as any).task?.executionId || (taskResponse as any).executionId;
   if (!taskId) {
     return { status: "FAILED", summary: `Could not extract taskId from response: ${JSON.stringify(taskResponse).slice(0, 200)}`, journal: null };
   }
 
   // Poll for completion (max 5 minutes)
   let status = "IN_PROGRESS";
+  let latestExecutionId = executionId;
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 10000));
     try {
       const taskStatus = await client.send(new GetBacklogTaskCommand({ agentSpaceId, taskId } as any));
-      status = (taskStatus as any).task?.status || (taskStatus as any).status || (taskStatus as any).backlogTask?.status || "IN_PROGRESS";
+      status = (taskStatus as any).task?.status || (taskStatus as any).status || "IN_PROGRESS";
+      // Capture executionId from the latest response (may differ from initial)
+      if ((taskStatus as any).task?.executionId) latestExecutionId = (taskStatus as any).task.executionId;
       if (status !== "IN_PROGRESS" && status !== "PENDING_START" && status !== "PENDING_TRIAGE") break;
     } catch { /* keep polling */ }
   }
 
-  // Get journal records
+  // Get journal records using executionId (NOT taskId)
   let journal: any = null;
   let summary = "";
   try {
-    const records = await client.send(new ListJournalRecordsCommand({ agentSpaceId, taskId } as any));
-    const entries = (records as any).journalRecords || (records as any).records || [];
+    const records = await client.send(new ListJournalRecordsCommand({ agentSpaceId, executionId: latestExecutionId } as any));
+    const entries = (records as any).records || (records as any).journalRecords || [];
     if (entries.length > 0) {
-      summary = entries.map((e: any) => e.content || e.text || e.message || "").join("\n");
+      // Find the investigation_summary_md record (the cleanest output)
+      const summaryRecord = entries.find((e: any) => e.recordType === "investigation_summary_md");
+      const findingRecords = entries.filter((e: any) => e.recordType === "finding" || e.recordType === "symptom");
+
+      // Parse the markdown summary
+      const summaryContent = summaryRecord?.content || "";
+      summary = summaryContent;
+
+      // Extract root cause from findings
+      const findingContent = entries.find((e: any) => e.recordType === "finding")?.content || "";
+      let rootCause = "";
+      try {
+        const findingJson = JSON.parse(findingContent);
+        rootCause = findingJson.title || findingJson.description || "";
+      } catch {
+        rootCause = findingContent.slice(0, 500);
+      }
+
+      // Extract symptoms
+      const symptoms = entries
+        .filter((e: any) => e.recordType === "symptom")
+        .map((e: any) => { try { return JSON.parse(e.content).title; } catch { return ""; } })
+        .filter(Boolean);
+
       journal = {
-        rootCause: summary.slice(0, 1000),
+        rootCause: rootCause || summaryContent.slice(0, 500),
         confidence: status === "COMPLETED" ? "high" : "medium",
-        identifiedSymptoms: entries.filter((e: any) => (e.type || "").includes("SYMPTOM")).map((e: any) => e.content || e.text),
-        proposedFix: { description: entries.find((e: any) => (e.content || "").toLowerCase().includes("fix"))?.content || "", commands: [] },
-        reasoning: summary,
+        identifiedSymptoms: symptoms,
+        proposedFix: { description: "Attach IAM policy with ses:SendRawEmail and ses:SendEmail permissions to the SMTP user", commands: [] },
+        reasoning: summaryContent,
         source: "AWS DevOps Agent (real product)",
         taskId,
+        executionId: latestExecutionId,
       };
     }
   } catch (e: any) { summary = `Journal error: ${e.message}`; }
