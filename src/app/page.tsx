@@ -341,8 +341,15 @@ export default function DevOpsAgentProvingGround() {
                 )}
 
                 {s.status === "deploying" && (
-                  <div className="mt-3 p-4 bg-gray-900 border border-gray-700 rounded-lg">
-                    <ProgressStepper />
+                  <div className="mt-3 p-4 bg-gray-800 border border-gray-700 rounded-lg">
+                    <div className="flex items-center gap-2 text-blue-400 text-sm">
+                      <span className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin inline-block"/>
+                      Running full test...
+                    </div>
+                    <p className="text-xs text-gray-400 mt-2">
+                      Generating CFN → Validating → Deploying → Waiting for stack → Invoking DevOps Agent → Collecting results
+                    </p>
+                    <p className="text-[10px] text-gray-500 mt-1">This typically takes 3-8 minutes. Do not close this tab.</p>
                   </div>
                 )}
 
@@ -520,56 +527,3 @@ function StatusBadge({ status }: { status: Scenario["status"] }) {
   return <span className={`text-xs font-medium ${c[status] || ""} ${["generating", "deploying"].includes(status) ? "animate-pulse" : ""}`}>{t[status]}</span>;
 }
 
-function ProgressStepper() {
-  const [activeStep, setActiveStep] = useState(0);
-  const steps = [
-    { label: "Generate CFN", icon: "📝", description: "Creating broken environment template" },
-    { label: "Validate", icon: "✓", description: "Checking template validity" },
-    { label: "Deploy Stack", icon: "🚀", description: "Deploying to your account" },
-    { label: "Wait", icon: "⏳", description: "Stack creating (~2-5 min)" },
-    { label: "Inspect", icon: "🔍", description: "Reading resource states" },
-    { label: "Agent Diagnose", icon: "🤖", description: "DevOps Agent analyzing" },
-    { label: "Evaluate", icon: "📊", description: "Calculating metrics" },
-  ];
-
-  // Auto-advance the stepper to simulate progress
-  useEffect(() => {
-    const timings = [3000, 2000, 5000, 60000, 5000, 15000, 3000]; // approximate step durations
-    let timeout: NodeJS.Timeout;
-    const advance = (step: number) => {
-      if (step < steps.length - 1) {
-        timeout = setTimeout(() => {
-          setActiveStep(step + 1);
-          advance(step + 1);
-        }, timings[step]);
-      }
-    };
-    advance(0);
-    return () => clearTimeout(timeout);
-  }, []);
-
-  return (
-    <div>
-      <div className="flex items-center gap-1 mb-3">
-        {steps.map((step, idx) => (
-          <React.Fragment key={idx}>
-            <div className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium transition-all ${
-              idx < activeStep ? "bg-green-900/50 text-green-400" :
-              idx === activeStep ? "bg-blue-600 text-white animate-pulse" :
-              "bg-gray-800 text-gray-500"
-            }`}>
-              <span>{idx < activeStep ? "✓" : step.icon}</span>
-              <span className="hidden sm:inline">{step.label}</span>
-            </div>
-            {idx < steps.length - 1 && (
-              <div className={`w-3 h-0.5 ${idx < activeStep ? "bg-green-500" : "bg-gray-700"}`} />
-            )}
-          </React.Fragment>
-        ))}
-      </div>
-      <p className="text-xs text-gray-400">
-        <span className="text-blue-400 font-medium">{steps[activeStep]?.label}</span> — {steps[activeStep]?.description}
-      </p>
-    </div>
-  );
-}
