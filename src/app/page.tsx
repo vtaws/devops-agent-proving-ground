@@ -28,6 +28,7 @@ interface Scenario {
   id: string; case: RankedCase | SupportCase;
   status: "generating" | "ready" | "deploying" | "complete" | "failed";
   plan?: SimPlan; deployResult?: any; verification?: any; agentResult?: any; metrics?: any; error?: string;
+  pipelineStage?: string; // current active stage for live progress
 }
 type InputMode = "auto" | "manual";
 
@@ -167,14 +168,32 @@ export default function DevOpsAgentProvingGround() {
     }
   };
 
+  const updateStage = (scenarioId: string, stage: string) => {
+    setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, pipelineStage: stage } : s));
+  };
+
   const deployScenario = async (scenarioId: string) => {
     const scenario = scenarios.find((s) => s.id === scenarioId);
     if (!scenario?.plan) return;
     if (!userCreds) { setShowCredModal(true); return; }
 
-    setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "deploying" as const } : s));
+    setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "deploying" as const, pipelineStage: "auth" } : s));
 
     try {
+      // All-in-one call — but we update the stage estimate based on time
+      const startTime = Date.now();
+      const stageTimer = setInterval(() => {
+        const elapsed = (Date.now() - startTime) / 1000;
+        let stage = "auth";
+        if (elapsed > 3) stage = "generate";
+        if (elapsed > 15) stage = "deploy";
+        if (elapsed > 30) stage = "waiting";
+        if (elapsed > 120) stage = "agent_setup";
+        if (elapsed > 130) stage = "agent_running";
+        if (elapsed > 280) stage = "evaluate";
+        setScenarios((p) => p.map((s) => s.id === scenarioId && s.status === "deploying" ? { ...s, pipelineStage: stage } : s));
+      }, 2000);
+
       const r = await fetch("/api/devops-agent/run-full-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -187,28 +206,32 @@ export default function DevOpsAgentProvingGround() {
           cleanup: false,
         }),
       });
+
+      clearInterval(stageTimer);
       const d = await r.json();
 
       if (d.error) {
         if (d.needsAuth) setShowCredModal(true);
-        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: d.error, deployResult: d } : s));
+        // Show which step failed
+        const failedStep = d.steps?.find((s: any) => s.status === "error")?.step || "";
+        setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: d.error, pipelineStage: failedStep || "failed", deployResult: d } : s));
         return;
       }
 
       setScenarios((p) => p.map((s) => s.id === scenarioId ? {
         ...s,
         status: "complete" as const,
+        pipelineStage: "done",
         deployResult: { stackName: d.stackName, template: d.template, account: d.account },
         agentResult: d.diagnosis,
         metrics: { ...d.metrics, evaluation: d.evaluation || {} },
         verification: { steps: d.steps, totalTimeSeconds: d.totalTimeSeconds },
       } : s));
     } catch (e: any) {
-      setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: e.message } : s));
+      setScenarios((p) => p.map((s) => s.id === scenarioId ? { ...s, status: "failed" as const, error: e.message, pipelineStage: "failed" } : s));
     }
   };
 
-  // Poll not needed anymore — run-full-test does everything in one call
   
 
   const handleManualSimulate = () => {
@@ -342,14 +365,11 @@ export default function DevOpsAgentProvingGround() {
 
                 {s.status === "deploying" && (
                   <div className="mt-3 p-4 bg-gray-800 border border-gray-700 rounded-lg">
-                    <div className="flex items-center gap-2 text-blue-400 text-sm">
+                    <div className="flex items-center gap-2 text-blue-400 text-sm mb-3">
                       <span className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin inline-block"/>
-                      Running full test...
+                      Running full test pipeline...
                     </div>
-                    <p className="text-xs text-gray-400 mt-2">
-                      Generating CFN → Validating → Deploying → Waiting for stack → Invoking DevOps Agent → Collecting results
-                    </p>
-                    <p className="text-[10px] text-gray-500 mt-1">This typically takes 3-8 minutes. Do not close this tab.</p>
+                    <PipelineStages activeStage={s.pipelineStage || "auth"} />
                   </div>
                 )}
 
@@ -527,3 +547,40 @@ function StatusBadge({ status }: { status: Scenario["status"] }) {
   return <span className={`text-xs font-medium ${c[status] || ""} ${["generating", "deploying"].includes(status) ? "animate-pulse" : ""}`}>{t[status]}</span>;
 }
 
+
+function PipelineStages({ activeStage }: { activeStage: string }) {
+  const stages = [
+    { id: "auth", label: "Auth", icon: "🔑" },
+    { id: "generate", label: "Generate CFN", icon: "📝" },
+    { id: "deploy", label: "Deploy", icon: "🚀" },
+    { id: "waiting", label: "Stack Creating", icon: "⏳" },
+    { id: "agent_setup", label: "Agent Setup", icon: "🔧" },
+    { id: "agent_running", label: "Agent Diagnosing", icon: "🤖" },
+    { id: "evaluate", label: "Evaluate", icon: "📊" },
+  ];
+
+  const activeIdx = stages.findIndex((s) => s.id === activeStage);
+
+  return (
+    <div className="space-y-1">
+      {stages.map((stage, idx) => {
+        const isDone = idx < activeIdx;
+        const isActive = idx === activeIdx;
+        const isPending = idx > activeIdx;
+        return (
+          <div key={stage.id} className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs ${
+            isDone ? "bg-green-900/30 text-green-400" :
+            isActive ? "bg-blue-900/40 text-blue-300 font-medium" :
+            "text-gray-600"
+          }`}>
+            <span className="w-5 text-center">
+              {isDone ? "✓" : isActive ? <span className="inline-block w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"/> : stage.icon}
+            </span>
+            <span>{stage.label}</span>
+            {isActive && <span className="ml-auto text-[10px] text-blue-400 animate-pulse">running...</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
