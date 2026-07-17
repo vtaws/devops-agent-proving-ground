@@ -319,13 +319,8 @@ export default function DevOpsAgentProvingGround() {
                 )}
 
                 {s.status === "deploying" && (
-                  <div className="mt-3 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                    <div className="flex items-center gap-2 text-blue-700 text-sm animate-pulse">
-                      <span className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin inline-block"/>
-                      Running full test pipeline...
-                    </div>
-                    <p className="text-xs text-blue-600 mt-2">Deploy CFN → Wait for stack → Inspect resources → Run DevOps Agent → Calculate savings</p>
-                    <p className="text-[10px] text-blue-500 mt-1">This may take 2-5 minutes depending on stack complexity</p>
+                  <div className="mt-3 p-4 bg-gray-900 border border-gray-700 rounded-lg">
+                    <ProgressStepper />
                   </div>
                 )}
 
@@ -374,23 +369,41 @@ export default function DevOpsAgentProvingGround() {
                     <details open>
                       <summary className="text-sm font-medium text-gray-700 cursor-pointer">🤖 Agent Diagnosis</summary>
                       <div className="mt-2 space-y-2">
-                        <div className="p-3 bg-gray-50 rounded-lg">
-                          <p className="text-[10px] font-bold text-gray-600 uppercase">Root Cause Identified</p>
-                          <p className="text-sm text-gray-900 mt-1">{s.agentResult.rootCause}</p>
+                        {s.agentResult.identifiedSymptoms?.length > 0 && (
+                          <div className="p-3 bg-orange-50 rounded-lg">
+                            <p className="text-[10px] font-bold text-orange-700 uppercase">Symptoms Identified</p>
+                            <ul className="text-xs text-orange-900 mt-1 space-y-0.5">
+                              {s.agentResult.identifiedSymptoms.map((sym: string, i: number) => <li key={i}>• {sym}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        <div className="p-3 bg-blue-50 rounded-lg">
+                          <p className="text-[10px] font-bold text-blue-700 uppercase">Root Cause Identified</p>
+                          <p className="text-sm text-blue-900 mt-1">{typeof s.agentResult.rootCause === "string" ? s.agentResult.rootCause : JSON.stringify(s.agentResult.rootCause)}</p>
                         </div>
                         {s.agentResult.reasoning && (
                           <div className="p-3 bg-gray-50 rounded-lg">
                             <p className="text-[10px] font-bold text-gray-600 uppercase">Reasoning</p>
-                            <p className="text-xs text-gray-700 mt-1">{s.agentResult.reasoning}</p>
+                            <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap">{s.agentResult.reasoning}</p>
                           </div>
                         )}
-                        {s.agentResult.proposedFix?.commands?.length > 0 && (
+                        {s.agentResult.proposedFix && (
                           <div className="p-3 bg-gray-900 rounded-lg">
                             <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Proposed Fix</p>
-                            <p className="text-xs text-gray-300 mb-2">{s.agentResult.proposedFix.description}</p>
-                            {s.agentResult.proposedFix.commands.map((cmd: string, i: number) => (
+                            {s.agentResult.proposedFix.description && (
+                              <p className="text-xs text-gray-300 mb-2">{s.agentResult.proposedFix.description}</p>
+                            )}
+                            {s.agentResult.proposedFix.commands?.map((cmd: string, i: number) => (
                               <code key={i} className="block text-xs text-green-400 font-mono bg-gray-800 px-2 py-1 rounded mb-1">$ {cmd}</code>
                             ))}
+                          </div>
+                        )}
+                        {s.agentResult.additionalInvestigation?.length > 0 && (
+                          <div className="p-3 bg-purple-50 rounded-lg">
+                            <p className="text-[10px] font-bold text-purple-700 uppercase">Additional Investigation Needed</p>
+                            <ul className="text-xs text-purple-900 mt-1 space-y-0.5">
+                              {s.agentResult.additionalInvestigation.map((item: string, i: number) => <li key={i}>• {item}</li>)}
+                            </ul>
                           </div>
                         )}
                       </div>
@@ -483,4 +496,58 @@ function StatusBadge({ status }: { status: Scenario["status"] }) {
   const c: Record<string, string> = { generating: "text-purple-600", ready: "text-blue-600", deploying: "text-orange-600", complete: "text-green-600", failed: "text-red-600" };
   const t: Record<string, string> = { generating: "⏳ Generating Plan...", ready: "✓ Plan Ready", deploying: "🔄 Running Full Test...", complete: "✅ Complete", failed: "❌ Failed" };
   return <span className={`text-xs font-medium ${c[status] || ""} ${["generating", "deploying"].includes(status) ? "animate-pulse" : ""}`}>{t[status]}</span>;
+}
+
+function ProgressStepper() {
+  const [activeStep, setActiveStep] = useState(0);
+  const steps = [
+    { label: "Generate CFN", icon: "📝", description: "Creating broken environment template" },
+    { label: "Validate", icon: "✓", description: "Checking template validity" },
+    { label: "Deploy Stack", icon: "🚀", description: "Deploying to your account" },
+    { label: "Wait", icon: "⏳", description: "Stack creating (~2-5 min)" },
+    { label: "Inspect", icon: "🔍", description: "Reading resource states" },
+    { label: "Agent Diagnose", icon: "🤖", description: "DevOps Agent analyzing" },
+    { label: "Evaluate", icon: "📊", description: "Calculating metrics" },
+  ];
+
+  // Auto-advance the stepper to simulate progress
+  useEffect(() => {
+    const timings = [3000, 2000, 5000, 60000, 5000, 15000, 3000]; // approximate step durations
+    let timeout: NodeJS.Timeout;
+    const advance = (step: number) => {
+      if (step < steps.length - 1) {
+        timeout = setTimeout(() => {
+          setActiveStep(step + 1);
+          advance(step + 1);
+        }, timings[step]);
+      }
+    };
+    advance(0);
+    return () => clearTimeout(timeout);
+  }, []);
+
+  return (
+    <div>
+      <div className="flex items-center gap-1 mb-3">
+        {steps.map((step, idx) => (
+          <React.Fragment key={idx}>
+            <div className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium transition-all ${
+              idx < activeStep ? "bg-green-900/50 text-green-400" :
+              idx === activeStep ? "bg-blue-600 text-white animate-pulse" :
+              "bg-gray-800 text-gray-500"
+            }`}>
+              <span>{idx < activeStep ? "✓" : step.icon}</span>
+              <span className="hidden sm:inline">{step.label}</span>
+            </div>
+            {idx < steps.length - 1 && (
+              <div className={`w-3 h-0.5 ${idx < activeStep ? "bg-green-500" : "bg-gray-700"}`} />
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+      <p className="text-xs text-gray-400">
+        <span className="text-blue-400 font-medium">{steps[activeStep]?.label}</span> — {steps[activeStep]?.description}
+      </p>
+    </div>
+  );
 }
