@@ -5,11 +5,25 @@ Usage: python3 scripts/mcp-call.py <tool_name> '<json_args>'
 """
 import sys, os, json
 
-# Setup paths
-MCP_BASE = os.path.expanduser("~/.toolbox/tools/aws-support-mcp/1.0.1.78.0")
-sys.path.insert(0, os.path.join(MCP_BASE, "lib/python3.10/site-packages"))
-os.environ['REQUESTS_CA_BUNDLE'] = os.path.join(MCP_BASE, "lib/python3.10/site-packages/amazoncerts/internal_and_external_cacerts.pem")
-os.environ['SSL_CERT_FILE'] = os.environ['REQUESTS_CA_BUNDLE']
+# Setup paths — auto-detect MCP version
+import glob as _glob
+_mcp_versions = _glob.glob(os.path.expanduser("~/.toolbox/tools/aws-support-mcp/[0-9]*"))
+_mcp_versions.sort(reverse=True)  # newest first
+MCP_BASE = _mcp_versions[0] if _mcp_versions else os.path.expanduser("~/.toolbox/tools/aws-support-mcp/1.0.1.78.0")
+
+# Auto-detect Python version in site-packages (could be python3.10, python3.11, etc.)
+import glob
+site_packages_paths = glob.glob(os.path.join(MCP_BASE, "lib/python*/site-packages"))
+if site_packages_paths:
+    sys.path.insert(0, site_packages_paths[0])
+    cert_path = os.path.join(site_packages_paths[0], "amazoncerts/internal_and_external_cacerts.pem")
+    if os.path.exists(cert_path):
+        os.environ['REQUESTS_CA_BUNDLE'] = cert_path
+        os.environ['SSL_CERT_FILE'] = cert_path
+else:
+    sys.path.insert(0, os.path.join(MCP_BASE, "lib/python3.10/site-packages"))
+    os.environ['REQUESTS_CA_BUNDLE'] = os.path.join(MCP_BASE, "lib/python3.10/site-packages/amazoncerts/internal_and_external_cacerts.pem")
+    os.environ['SSL_CERT_FILE'] = os.environ['REQUESTS_CA_BUNDLE']
 
 import warnings
 warnings.filterwarnings("ignore")

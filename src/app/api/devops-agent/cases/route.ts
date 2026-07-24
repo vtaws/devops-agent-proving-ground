@@ -9,8 +9,19 @@ import { homedir } from "os";
  * Fetches support cases for a customer using aws-support-mcp Python tool.
  */
 
-const PYTHON_BIN = join(homedir(), ".toolbox/tools/aws-support-mcp/1.0.1.78.0/bin/python3");
 const SCRIPT_PATH = join(process.cwd(), "scripts/mcp-call.py");
+
+// Auto-detect MCP Python binary (version may differ across machines)
+function getMcpPythonBin(): string {
+  const fs = require("fs");
+  const mcpDir = join(homedir(), ".toolbox/tools/aws-support-mcp");
+  try {
+    const versions = fs.readdirSync(mcpDir).filter((f: string) => /^\d/.test(f)).sort().reverse();
+    if (versions.length > 0) return join(mcpDir, versions[0], "bin/python3");
+  } catch {}
+  return join(mcpDir, "1.0.1.78.0/bin/python3");
+}
+const PYTHON_BIN = getMcpPythonBin();
 
 export async function POST(request: NextRequest) {
   try {
