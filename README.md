@@ -13,9 +13,10 @@ Deploy broken AWS environments from real support cases, test DevOps Agent capabi
 ## Prerequisites
 
 - Amazon corporate laptop
+- `toolbox` installed ([install guide](https://builderhub.corp.amazon.com/docs/toolbox/user-guide/install.html))
 - Chrome browser (recommended for best experience)
 
-Everything else (toolbox, Node.js, aws-support-mcp, dependencies) is handled by the setup script.
+Everything else (Node.js, aws-support-mcp, Midway auth, dependencies) is handled by the setup script.
 
 ## Quick Start
 
