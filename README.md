@@ -69,3 +69,50 @@ Enter any ticket subject + service → AI generates the simulation plan → depl
 - **Direct CFN deployment** — no change management pipeline (this is a sandbox tool)
 - **Isengard-only** — templates use minimal resources (t3.micro, small storage) to keep costs near zero
 - **Auto-cleanup tags** — all stacks tagged with `AutoDelete=true` for easy identification and deletion
+
+
+## 📦 Distribution — Share with Other TAMs
+
+### One-Command Setup (for other TAMs)
+
+1. Get the source (ask vtnair@ or clone from the internal repo):
+   ```bash
+   scp -r dev-dsk-vtnair-2a-d00ab4d4.us-west-2.amazon.com:~/devops-agent-proving-ground ~/devops-agent-proving-ground
+   ```
+
+2. Run the setup script:
+   ```bash
+   cd ~/devops-agent-proving-ground
+   bash setup.sh
+   ```
+
+   The script handles everything:
+   - Checks Node.js 18+ (installs via nvm if needed)
+   - Installs `aws-support-mcp` via toolbox
+   - Configures the correct MCP version path
+   - Installs npm dependencies
+   - Builds and starts the app
+
+### What Each TAM Needs
+
+| Requirement | How to get it |
+|------------|---------------|
+| Amazon laptop on VPN | Standard |
+| `toolbox` | Pre-installed on corp machines |
+| Midway auth | `mwinit -o` (standard TAM workflow) |
+| Node.js 18+ | `nvm install 18` |
+| Isengard account | Use your own Isengard for stack deployment |
+
+### How Auth Works
+
+- **Customer/case fetching**: Uses YOUR Midway session (your CMC access = your customers)
+- **Stack deployment + DevOps Agent**: Uses Isengard creds you paste in the app
+- Each TAM sees THEIR customers, runs tests in THEIR Isengard account
+
+### Refreshing Midway
+
+If case fetching fails with auth errors:
+```bash
+mwinit -o
+```
+Then refresh the app.

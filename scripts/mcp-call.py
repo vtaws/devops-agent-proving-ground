@@ -25,10 +25,12 @@ def get_customers(args):
 def fetch_cases(args):
     from aws_support_mcp.functions.caseapi import fetch_cases as _fetch_cases
     result = _fetch_cases(
+        case_ids=args.get("case_ids", None),
         customer_id=args.get("customer_id", ""),
         start_date=args.get("start_date", ""),
         case_status=args.get("case_status", ""),
         payer_id=args.get("payer_id", ""),
+        include_communications=args.get("include_communications", True),
     )
     if isinstance(result, dict):
         return result

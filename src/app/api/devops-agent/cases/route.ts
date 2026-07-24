@@ -14,10 +14,25 @@ const SCRIPT_PATH = join(process.cwd(), "scripts/mcp-call.py");
 
 export async function POST(request: NextRequest) {
   try {
-    const { customerId, customerName, monthsBack = 6 } = await request.json();
+    const { customerId, customerName, monthsBack = 6, caseIds } = await request.json();
 
+    // Mode 1: Fetch specific case(s) by ID
+    if (caseIds && caseIds.length > 0) {
+      const args = JSON.stringify({ case_ids: caseIds });
+      const result = execSync(
+        `${PYTHON_BIN} ${SCRIPT_PATH} caseapi_fetch_cases '${args}'`,
+        { timeout: 60000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+      ).trim();
+      const data = JSON.parse(result);
+      if (data.cases && data.cases.length > 0) {
+        return jsonResponse({ cases: normalizeCases(data.cases), source: "aws-support-mcp" });
+      }
+      return jsonResponse({ cases: [], error: `Case(s) not found: ${caseIds.join(", ")}`, source: "aws-support-mcp" });
+    }
+
+    // Mode 2: Fetch by customer
     if (!customerId && !customerName) {
-      return jsonResponse({ error: "Customer ID or name required" }, 400);
+      return jsonResponse({ error: "Customer ID, name, or case IDs required" }, 400);
     }
 
     // Calculate start date
@@ -75,6 +90,15 @@ function normalizeCases(cases: any[]): any[] {
       resolutionTimeHours = parseFloat(counts.duration_hours) || 0;
     }
 
+    // Extract correspondence text for RCA extraction
+    let correspondence = "";
+    if (c.communications && Array.isArray(c.communications)) {
+      correspondence = c.communications
+        .filter((m: any) => m.sentBy === "engineer" || m.sentBy === "aws" || m.direction === "sent")
+        .map((m: any) => `[${m.timestamp || m.date || ""}] ${m.body || m.text || m.content || ""}`)
+        .join("\n\n");
+    }
+
     return {
       caseId: c.caseId || sys.caseId,
       subject: sys.subject || "Unknown",
@@ -88,6 +112,8 @@ function normalizeCases(cases: any[]): any[] {
       category: sys.category || "Technical support",
       accountName: sys.accountName || "",
       accountId: sys.accountId || "",
+      correspondence: correspondence || c.correspondence || "",
+      description: sys.description || c.description || "",
     };
   });
 }
