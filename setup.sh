@@ -142,8 +142,8 @@ else
     echo -e "${YELLOW}Setting up the app...${NC}"
     mkdir -p "$APP_DIR"
     # Try git clone if repo is configured
-    if git clone ssh://git.amazon.com/pkg/DevOpsAgentProvingGround "$APP_DIR" 2>/dev/null; then
-        echo -e "${GREEN}✓${NC} Cloned from git"
+    if git clone https://github.com/vtaws/devops-agent-proving-ground.git "$APP_DIR" 2>/dev/null; then
+        echo -e "${GREEN}✓${NC} Cloned from GitHub"
     else
         echo -e "${RED}✗ Could not find app source.${NC}"
         echo ""
