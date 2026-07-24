@@ -12,21 +12,22 @@ Deploy broken AWS environments from real support cases, test DevOps Agent capabi
 
 ## Prerequisites
 
-- AWS CLI v2 configured with your Isengard account
-- `aws-support-mcp` toolbox: `toolbox install aws-support-mcp`
-- Node.js 18+
-- Midway authentication: `mwinit -o -s`
+- Amazon laptop on corp VPN
+- `toolbox` installed (standard on corp machines)
+
+Everything else (Node.js, aws-support-mcp, dependencies) is handled by the setup script.
 
 ## Quick Start
 
 ```bash
-npm install
-npm run dev
+git clone https://github.com/vtaws/devops-agent-proving-ground.git
+cd devops-agent-proving-ground
+bash setup.sh
 ```
 
-Open http://localhost:3000
+The script installs all dependencies and starts the app. Open http://localhost:3000
 
-When prompted, paste your Isengard credentials:
+When prompted in the app, paste your Isengard credentials:
 ```bash
 isengardcli credentials --account <YOUR_ACCOUNT_ID> --role Admin
 ```
