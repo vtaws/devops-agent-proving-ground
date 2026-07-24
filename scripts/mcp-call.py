@@ -7,9 +7,10 @@ import sys, os, json
 
 # Setup paths — auto-detect MCP version
 import glob as _glob
-_mcp_versions = _glob.glob(os.path.expanduser("~/.toolbox/tools/aws-support-mcp/[0-9]*"))
+_mcp_base_dir = os.path.expanduser("~/.toolbox/tools/aws-support-mcp")
+_mcp_versions = [d for d in _glob.glob(os.path.join(_mcp_base_dir, "[0-9]*")) if os.path.isdir(d)]
 _mcp_versions.sort(reverse=True)  # newest first
-MCP_BASE = _mcp_versions[0] if _mcp_versions else os.path.expanduser("~/.toolbox/tools/aws-support-mcp/1.0.1.78.0")
+MCP_BASE = _mcp_versions[0] if _mcp_versions else os.path.join(_mcp_base_dir, "1.0.1.78.0")
 
 # Auto-detect Python version in site-packages (could be python3.10, python3.11, etc.)
 import glob

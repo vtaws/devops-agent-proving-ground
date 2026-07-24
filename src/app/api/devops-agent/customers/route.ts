@@ -16,7 +16,9 @@ function getMcpPythonBin(): string {
   const fs = require("fs");
   const mcpDir = join(homedir(), ".toolbox/tools/aws-support-mcp");
   try {
-    const versions = fs.readdirSync(mcpDir).filter((f: string) => /^\d/.test(f)).sort().reverse();
+    const versions = fs.readdirSync(mcpDir)
+      .filter((f: string) => /^\d/.test(f) && fs.statSync(join(mcpDir, f)).isDirectory())
+      .sort().reverse();
     if (versions.length > 0) return join(mcpDir, versions[0], "bin/python3");
   } catch {}
   return join(mcpDir, "1.0.1.78.0/bin/python3");
