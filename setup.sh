@@ -27,7 +27,7 @@ echo -e "${YELLOW}Checking prerequisites...${NC}"
 # Check toolbox
 if ! command -v toolbox &> /dev/null; then
     echo -e "${RED}✗ toolbox not found.${NC}"
-    echo "  Install via: https://builderhub.corp.amazon.com/docs/toolbox/user-guide/install.html"
+    echo "  Install via: https://docs.hub.amazon.dev/builder-toolbox/user-guide/getting-started/"
     exit 1
 fi
 echo -e "${GREEN}✓${NC} toolbox"
