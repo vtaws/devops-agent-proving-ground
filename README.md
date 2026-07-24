@@ -12,7 +12,7 @@ Deploy broken AWS environments from real support cases, test DevOps Agent capabi
 
 ## Prerequisites
 
-- AWS CLI v2 configured (Isengard account: 738884735220)
+- AWS CLI v2 configured with your Isengard account
 - `aws-support-mcp` toolbox: `toolbox install aws-support-mcp`
 - Node.js 18+
 - Midway authentication: `mwinit -o -s`
@@ -28,7 +28,7 @@ Open http://localhost:3000
 
 When prompted, paste your Isengard credentials:
 ```bash
-isengardcli credentials --account 738884735220 --role Admin
+isengardcli credentials --account <YOUR_ACCOUNT_ID> --role Admin
 ```
 
 ## Two Input Modes
@@ -75,9 +75,9 @@ Enter any ticket subject + service → AI generates the simulation plan → depl
 
 ### One-Command Setup (for other TAMs)
 
-1. Get the source (ask vtnair@ or clone from the internal repo):
+1. Get the source:
    ```bash
-   scp -r dev-dsk-vtnair-2a-d00ab4d4.us-west-2.amazon.com:~/devops-agent-proving-ground ~/devops-agent-proving-ground
+   git clone https://github.com/vtaws/devops-agent-proving-ground.git
    ```
 
 2. Run the setup script:

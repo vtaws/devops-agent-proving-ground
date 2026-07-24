@@ -150,8 +150,8 @@ else
         echo "  Option 1: Run this script from inside the project folder:"
         echo -e "    ${BOLD}cd /path/to/devops-agent-proving-ground && bash setup.sh${NC}"
         echo ""
-        echo "  Option 2: Copy from vtnair's CDD:"
-        echo -e "    ${BOLD}scp -r dev-dsk-vtnair-2a-d00ab4d4.us-west-2.amazon.com:~/devops-agent-proving-ground $APP_DIR${NC}"
+        echo "  Option 2: Copy from the maintainer's CDD:"
+        echo -e "    ${BOLD}scp -r <CDD_HOSTNAME>:~/devops-agent-proving-ground $APP_DIR${NC}"
         echo -e "    Then re-run: ${BOLD}bash $APP_DIR/setup.sh${NC}"
         exit 1
     fi

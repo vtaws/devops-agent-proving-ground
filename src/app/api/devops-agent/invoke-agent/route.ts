@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
  * Invoke the real DevOpsDiagnosticAgent via AgentCore A2A protocol.
  */
 async function invokeViaAgentCore(runtimeId: string, stackName: string, region: string, plan: any) {
-  const accountId = "738884735220";
+  const accountId = ""; // Set via user credentials at runtime
   const agentRegion = "us-east-1";
   const url = `https://bedrock-agentcore.${agentRegion}.amazonaws.com/runtimes/arn%3Aaws%3Abedrock-agentcore%3A${agentRegion}%3A${accountId}%3Aruntime%2F${runtimeId}/invocations`;
 

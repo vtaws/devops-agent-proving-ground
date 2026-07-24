@@ -2,13 +2,13 @@
 # Deploy DevOpsDiagnosticAgent to AgentCore
 # Prerequisites:
 #   - npm install -g @aws/agentcore@latest
-#   - AWS credentials for account 738884735220
+#   - AWS credentials for account <YOUR_ACCOUNT_ID>
 #   - Midway auth: mwinit -o -s
 
 set -e
 
 echo "🚀 Deploying DevOpsDiagnosticAgent to AgentCore..."
-echo "   Account: 738884735220"
+echo "   Account: <YOUR_ACCOUNT_ID>"
 echo "   Region: us-east-1"
 echo ""
 

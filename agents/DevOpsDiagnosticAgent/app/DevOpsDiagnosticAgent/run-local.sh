@@ -5,7 +5,7 @@
 set -e
 
 echo "Starting DevOps Diagnostic Agent locally..."
-echo "Make sure you have valid AWS credentials (isengardcli credentials --account 738884735220 --role Admin)"
+echo "Make sure you have valid AWS credentials (isengardcli credentials --account <YOUR_ACCOUNT_ID> --role Admin)"
 
 # Install dependencies if needed
 if [ ! -d ".venv" ]; then

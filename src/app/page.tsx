@@ -399,7 +399,7 @@ export default function DevOpsAgentProvingGround() {
             {credsValid === true && <span className="text-green-400 text-xs">✓ {userAccount || "Authenticated"}</span>}
             {credsValid === false && <button onClick={() => setShowCredModal(true)} className="text-red-400 text-xs underline">⚠️ Credentials expired</button>}
             {credsValid === true && (
-              <a href="https://us-east-1.console.aws.amazon.com/devops-agent/home?region=us-east-1#/agent-spaces/1ba6440e-c1c6-4d40-b922-8bc162618345"
+              <a href="https://us-east-1.console.aws.amazon.com/devops-agent/home?region=us-east-1#/agent-spaces"
                 target="_blank" rel="noopener noreferrer"
                 className="text-xs px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-500 no-underline">
                 🔗 Agent Console
@@ -551,7 +551,7 @@ export default function DevOpsAgentProvingGround() {
                       <div className="flex items-center justify-between pt-2 border-t border-gray-100">
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-gray-500">Stack: {s.deployResult.stackName} {s.deployResult.cleaned ? "(deleted)" : ""}</span>
-                          <a href="https://us-east-1.console.aws.amazon.com/devops-agent/home?region=us-east-1#/agent-spaces/1ba6440e-c1c6-4d40-b922-8bc162618345" target="_blank" rel="noopener noreferrer"
+                          <a href="https://us-east-1.console.aws.amazon.com/devops-agent/home?region=us-east-1#/agent-spaces" target="_blank" rel="noopener noreferrer"
                             className="text-xs px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200 no-underline">🔗 Console</a>
                         </div>
                         <button
@@ -798,7 +798,7 @@ export default function DevOpsAgentProvingGround() {
                         <div className="flex items-center gap-3">
                           <span className="text-xs text-gray-500">Stack: {s.deployResult.stackName} {s.deployResult.cleaned ? "(deleted)" : ""}</span>
                           {s.verification?.consoleUrl && (
-                            <a href="https://us-east-1.console.aws.amazon.com/devops-agent/home?region=us-east-1#/agent-spaces/1ba6440e-c1c6-4d40-b922-8bc162618345" target="_blank" rel="noopener noreferrer"
+                            <a href="https://us-east-1.console.aws.amazon.com/devops-agent/home?region=us-east-1#/agent-spaces" target="_blank" rel="noopener noreferrer"
                               className="text-xs px-2 py-1 bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200 no-underline">
                               🔗 View in Console
                             </a>

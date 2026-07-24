@@ -3,7 +3,7 @@
 # Usage: ./deploy-ec2.sh
 #
 # Prerequisites:
-# - AWS credentials configured for account 738884735220
+# - AWS credentials configured for account <YOUR_ACCOUNT_ID>
 # - A default VPC in us-east-1 with a public subnet
 
 set -e
