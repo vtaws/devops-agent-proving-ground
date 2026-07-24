@@ -12,10 +12,10 @@ Deploy broken AWS environments from real support cases, test DevOps Agent capabi
 
 ## Prerequisites
 
-- Amazon laptop on corp VPN
-- `toolbox` installed (standard on corp machines)
+- Amazon corporate laptop
+- Chrome browser (recommended for best experience)
 
-Everything else (Node.js, aws-support-mcp, dependencies) is handled by the setup script.
+Everything else (toolbox, Node.js, aws-support-mcp, dependencies) is handled by the setup script.
 
 ## Quick Start
 
