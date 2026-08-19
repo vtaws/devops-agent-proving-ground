@@ -29,12 +29,12 @@ export async function POST(request: NextRequest) {
   try {
     const { customerId, customerName, monthsBack = 6, caseIds } = await request.json();
 
-    // Mode 1: Fetch specific case(s) by ID
+    // Mode 1: Fetch specific case(s) by ID — include communications for RCA extraction
     if (caseIds && caseIds.length > 0) {
-      const args = JSON.stringify({ case_ids: caseIds });
+      const args = JSON.stringify({ case_ids: caseIds, include_communications: true });
       const result = execSync(
         `${PYTHON_BIN} ${SCRIPT_PATH} caseapi_fetch_cases '${args}'`,
-        { timeout: 60000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+        { timeout: 60000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 50 * 1024 * 1024 }
       ).trim();
       const data = JSON.parse(result);
       if (data.cases && data.cases.length > 0) {
@@ -58,11 +58,12 @@ export async function POST(request: NextRequest) {
       start_date: startDateStr,
       case_status: "",
       payer_id: "",
+      include_communications: false,
     });
 
     const result = execSync(
       `${PYTHON_BIN} ${SCRIPT_PATH} caseapi_fetch_cases '${args}'`,
-      { timeout: 60000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+      { timeout: 60000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 50 * 1024 * 1024 }
     ).trim();
 
     const data = JSON.parse(result);
