@@ -163,9 +163,11 @@ export default function DevOpsAgentProvingGround() {
   const rankCases = async (c: SupportCase[]) => {
     setRanking(true);
     try { const r = await fetch("/api/devops-agent/rank-cases", { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cases: c }) });
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cases: c, credentials: userCreds }) });
       const d = await r.json();
       if (d.rankedCases?.length) setRankedCases(d.rankedCases);
+      else if (d.error) setError(`Ranking failed: ${d.error}`);
+      else setError("Ranking returned no results. Check credentials.");
     } catch (e: any) { setError(e.message); } finally { setRanking(false); }
   };
 
@@ -183,7 +185,7 @@ export default function DevOpsAgentProvingGround() {
     try {
       const r = await fetch("/api/devops-agent/simulate", { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ caseData, mode: "plan" }) });
+        body: JSON.stringify({ caseData, mode: "plan", credentials: userCreds }) });
       const d = await r.json();
       if (d.error) {
         if (d.error.includes("expired")) { setShowCredModal(true); }
@@ -231,7 +233,7 @@ export default function DevOpsAgentProvingGround() {
       // Step 1: Generate plan
       const r = await fetch("/api/devops-agent/simulate", { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ caseData, mode: "plan" }) });
+        body: JSON.stringify({ caseData, mode: "plan", credentials: userCreds }) });
       const d = await r.json();
       if (d.error || !d.plan?.simulationPlan) {
         setScenarios((p) => p.map((s) => s.id === id ? { ...s, status: "failed" as const, error: d.error || "Plan generation failed" } : s));

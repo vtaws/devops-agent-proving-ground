@@ -4,10 +4,6 @@ import {
   InvokeModelCommand,
 } from "@aws-sdk/client-bedrock-runtime";
 
-const client = new BedrockRuntimeClient({
-  region: process.env.AWS_REGION || "us-east-1",
-});
-
 /**
  * POST /api/devops-agent/rank-cases
  *
@@ -20,11 +16,23 @@ const client = new BedrockRuntimeClient({
  */
 export async function POST(request: NextRequest) {
   try {
-    const { cases } = await request.json();
+    const { cases, credentials } = await request.json();
 
     if (!cases || cases.length === 0) {
       return new Response(JSON.stringify({ rankedCases: [] }), { status: 200 });
     }
+
+    // Use user's credentials if provided, else fall back to ambient env
+    const client = new BedrockRuntimeClient({
+      region: process.env.AWS_REGION || "us-east-1",
+      ...(credentials?.accessKeyId ? {
+        credentials: {
+          accessKeyId: credentials.accessKeyId,
+          secretAccessKey: credentials.secretAccessKey,
+          sessionToken: credentials.sessionToken,
+        },
+      } : {}),
+    });
 
     // Filter out trivial cases (account support, limit increases resolved in < 1 min)
     const technicalCases = cases.filter((c: any) => {

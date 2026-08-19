@@ -4,9 +4,18 @@ import {
   InvokeModelCommand,
 } from "@aws-sdk/client-bedrock-runtime";
 
-const client = new BedrockRuntimeClient({
-  region: process.env.AWS_REGION || "us-east-1",
-});
+function makeClient(credentials?: any) {
+  return new BedrockRuntimeClient({
+    region: process.env.AWS_REGION || "us-east-1",
+    ...(credentials?.accessKeyId ? {
+      credentials: {
+        accessKeyId: credentials.accessKeyId,
+        secretAccessKey: credentials.secretAccessKey,
+        sessionToken: credentials.sessionToken,
+      },
+    } : {}),
+  });
+}
 
 /**
  * POST /api/devops-agent/simulate
@@ -20,14 +29,14 @@ const client = new BedrockRuntimeClient({
  */
 export async function POST(request: NextRequest) {
   try {
-    const { caseData, mode = "plan" } = await request.json();
+    const { caseData, mode = "plan", credentials } = await request.json();
 
     if (!caseData || !caseData.subject) {
       return jsonResponse({ error: "Case data with subject required" }, 400);
     }
 
     if (mode === "plan") {
-      return await generateSimulationPlan(caseData);
+      return await generateSimulationPlan(caseData, credentials);
     } else if (mode === "evaluate") {
       return await evaluateAgentResult(caseData);
     }
@@ -43,7 +52,8 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function generateSimulationPlan(caseData: any) {
+async function generateSimulationPlan(caseData: any, credentials?: any) {
+  const client = makeClient(credentials);
   const payload = {
     anthropic_version: "bedrock-2023-05-31",
     max_tokens: 4000,
