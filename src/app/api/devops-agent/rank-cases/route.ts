@@ -56,7 +56,7 @@ IMPORTANT: Use the EXACT index numbers provided. Return ONLY valid JSON array wi
 Cases:
 ${casesToRank.map((c: any, idx: number) => `[${idx}] caseId="${c.caseId}" service="${c.service}" subject="${c.subject}" resolution=${c.resolutionTimeHours}h severity=${c.severity} category="${c.category}" account="${c.accountName || ""}"`).join("\n")}
 
-Return JSON array (top 5, sorted by score desc). Use the EXACT caseId string from above:
+Return JSON array (top 15, sorted by score desc). Use the EXACT caseId string from above:
 [{"index": 0, "caseId": "exact_case_id_string", "score": 0-100, "reasoning": "why", "reproducible": true/false, "repeatCount": number, "estimatedAgentSuccess": "high|medium|low", "estimatedTimeSaved": hours, "estimatedCostSaved": dollars}]`,
       }],
     };

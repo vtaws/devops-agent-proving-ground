@@ -587,7 +587,7 @@ export default function DevOpsAgentProvingGround() {
                 </button>
               )}
             </div>
-            <p className="text-xs text-gray-500 mb-3">Select multiple cases (3-5 recommended) for parallel testing, or run individually.</p>
+            <p className="text-xs text-gray-500 mb-3">Select multiple cases (up to 10) for parallel testing, or run individually.</p>
             <div className="space-y-3">
               {rankedCases.map((rc, idx) => {
                 const wasTested = scenarios.some((s) => s.case.caseId === rc.caseId && (s.status === "complete" || s.status === "failed"));
@@ -598,12 +598,12 @@ export default function DevOpsAgentProvingGround() {
                       <input type="checkbox" checked={selectedCaseIds.has(rc.caseId)}
                         onChange={(e) => {
                           const next = new Set(selectedCaseIds);
-                          if (e.target.checked) { if (next.size < 5) next.add(rc.caseId); }
+                          if (e.target.checked) { if (next.size < 10) next.add(rc.caseId); }
                           else next.delete(rc.caseId);
                           setSelectedCaseIds(next);
                         }}
                         className="mt-1 w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
-                        title={selectedCaseIds.size >= 5 && !selectedCaseIds.has(rc.caseId) ? "Max 5 cases" : "Select for batch run"}
+                        title={selectedCaseIds.size >= 10 && !selectedCaseIds.has(rc.caseId) ? "Max 10 cases" : "Select for batch run"}
                       />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1 flex-wrap">
